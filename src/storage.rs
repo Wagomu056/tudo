@@ -1,10 +1,37 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use directories::ProjectDirs;
 
 use crate::model::{AppError, BoardState, DoneEntry};
 
-pub const CURRENT_LOG: &str = "current.log";
+/// Resolve the platform-appropriate local data directory for the application.
+/// Creates the directory if it does not exist.
+///
+/// Returns paths like:
+///   macOS:   ~/Library/Application Support/tudo
+///   Linux:   ~/.local/share/tudo  (or $XDG_DATA_HOME/tudo)
+///   Windows: %LOCALAPPDATA%\tudo
+///   Fallback: ~/.tudo
+pub fn resolve_data_dir() -> Result<PathBuf, AppError> {
+    let path = if let Some(proj) = ProjectDirs::from("", "", "tudo") {
+        proj.data_local_dir().to_path_buf()
+    } else {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| {
+                AppError::Other(
+                    "cannot determine application data directory: \
+                     no valid home directory found"
+                        .to_string(),
+                )
+            })?;
+        PathBuf::from(home).join(".tudo")
+    };
+    fs::create_dir_all(&path)?;
+    Ok(path)
+}
 
 /// Load board state from the given path.
 /// Returns an empty board if the file does not exist.
@@ -23,9 +50,14 @@ pub fn load_board_from(path: &str) -> Result<BoardState, AppError> {
     }
 }
 
-/// Load board state from the default `current.log` path.
+/// Load board state from `current.log` in the platform data directory.
 pub fn load_board() -> Result<BoardState, AppError> {
-    load_board_from(CURRENT_LOG)
+    let data_dir = resolve_data_dir()?;
+    let path = data_dir.join("current.log");
+    let path_str = path.to_str().ok_or_else(|| {
+        AppError::Other("data directory path is not valid UTF-8".to_string())
+    })?;
+    load_board_from(path_str)
 }
 
 /// Persist board state to the given path (pretty-printed JSON, overwrite).
@@ -36,9 +68,14 @@ pub fn save_board_to(board: &mut BoardState, path: &str) -> Result<(), AppError>
     Ok(())
 }
 
-/// Persist board state to the default `current.log` path.
+/// Persist board state to `current.log` in the platform data directory.
 pub fn save_board(board: &mut BoardState) -> Result<(), AppError> {
-    save_board_to(board, CURRENT_LOG)
+    let data_dir = resolve_data_dir()?;
+    let path = data_dir.join("current.log");
+    let path_str = path.to_str().ok_or_else(|| {
+        AppError::Other("data directory path is not valid UTF-8".to_string())
+    })?;
+    save_board_to(board, path_str)
 }
 
 /// Append a completed task entry to the given log file (JSON Lines, append-only).
@@ -49,8 +86,9 @@ pub fn append_done_entry_to(entry: &DoneEntry, path: &Path) -> Result<(), AppErr
     Ok(())
 }
 
-/// Append a completed task entry to today's `YYYYMMDD.log` in the current directory.
+/// Append a completed task entry to today's `YYYYMMDD.log` in the platform data directory.
 pub fn append_done_entry(entry: &DoneEntry) -> Result<(), AppError> {
+    let data_dir = resolve_data_dir()?;
     let filename = format!("{}.log", chrono::Local::now().format("%Y%m%d"));
-    append_done_entry_to(entry, Path::new(&filename))
+    append_done_entry_to(entry, &data_dir.join(filename))
 }
