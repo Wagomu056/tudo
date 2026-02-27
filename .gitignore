@@ -1,0 +1,38 @@
+# Rust build artifacts
+/target/
+debug/
+release/
+*.rs.bk
+*.rlib
+
+# Cargo lock (keep for binaries)
+# Cargo.lock  # intentionally tracked for binaries
+
+# Test artifacts
+*.prof*
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+# Environment
+.env*
+*.env
+
+# Log files (data files — keep for local dev but not committed)
+*.log
+
+# Misc
+*.orig
+
+
+# Added by cargo
+
+/target
