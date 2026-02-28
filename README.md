@@ -2,7 +2,7 @@
 
 A terminal-based kanban board built with Rust and [ratatui](https://github.com/ratatui/ratatui).
 
-<!-- screenshot -->
+<img width="1247" height="883" alt="スクリーンショット 2026-02-28 23 47 48" src="https://github.com/user-attachments/assets/5d694ec4-dc1e-4f76-82ea-a4aa240702ce" />
 
 - 4-column kanban workflow: **Todo** → **In Progress** → **Blocked** → **Done**
 - Clickable URLs in task details
