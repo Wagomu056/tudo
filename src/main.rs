@@ -88,7 +88,9 @@ fn run_app(
 
                 match app.mode {
                     AppMode::Normal => handle_normal_key(app, key.code),
-                    AppMode::InputTitle | AppMode::InputDetail => handle_input_key(app, key.code),
+                    AppMode::InputTitle | AppMode::InputDetail => {
+                        handle_input_key(app, key.code, key.modifiers)
+                    }
                 }
 
                 // Persist after every mutation
@@ -146,8 +148,14 @@ fn handle_normal_key(app: &mut AppState, code: KeyCode) {
     }
 }
 
-fn handle_input_key(app: &mut AppState, code: KeyCode) {
+fn handle_input_key(app: &mut AppState, code: KeyCode, modifiers: KeyModifiers) {
     match code {
+        // Ctrl+J (0x0A = \n) をDetailモードのみ改行として扱う
+        KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.mode == AppMode::InputDetail {
+                app.input.push_char('\n');
+            }
+        }
         KeyCode::Enter => app.confirm_input(),
         KeyCode::Esc => app.cancel_input(),
         KeyCode::Backspace => app.input.pop_char(),
