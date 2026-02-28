@@ -254,6 +254,62 @@ impl AppState {
         self.mode = AppMode::Normal;
     }
 
+    // ── Reorder within column ─────────────────────────────────────────────
+
+    /// Move the focused task one position down within its column (J key).
+    /// Returns true if a swap occurred, false if already last (no-op).
+    pub fn reorder_task_down(&mut self) -> bool {
+        let col = self.focused_col;
+        let status = crate::model::ALL_STATUSES[col];
+        let cursor = self.focused_card[col];
+
+        let col_indices: Vec<usize> = self
+            .board
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.status == status)
+            .map(|(i, _)| i)
+            .collect();
+
+        if cursor + 1 >= col_indices.len() {
+            return false;
+        }
+
+        self.board
+            .tasks
+            .swap(col_indices[cursor], col_indices[cursor + 1]);
+        self.focused_card[col] = cursor + 1;
+        true
+    }
+
+    /// Move the focused task one position up within its column (K key).
+    /// Returns true if a swap occurred, false if already first (no-op).
+    pub fn reorder_task_up(&mut self) -> bool {
+        let col = self.focused_col;
+        let status = crate::model::ALL_STATUSES[col];
+        let cursor = self.focused_card[col];
+
+        if cursor == 0 {
+            return false;
+        }
+
+        let col_indices: Vec<usize> = self
+            .board
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.status == status)
+            .map(|(i, _)| i)
+            .collect();
+
+        self.board
+            .tasks
+            .swap(col_indices[cursor - 1], col_indices[cursor]);
+        self.focused_card[col] = cursor - 1;
+        true
+    }
+
     // ── Done entry helper ─────────────────────────────────────────────────
 
     /// Collect a DoneEntry if the last advance moved the focused task to Done.
@@ -436,6 +492,105 @@ mod tests {
         assert_eq!(app.focused_card[Status::Checking.col_index()], 1);
         // Source column (Doing) is now empty; cursor clamped to 0
         assert_eq!(app.focused_card[Status::Doing.col_index()], 0);
+    }
+
+    // ── T002/T007: Reorder tests ──────────────────────────────────────────
+
+    // Reorder down: normal swap
+    #[test]
+    fn test_reorder_task_down_swaps_and_follows_focus() {
+        let mut app =
+            make_app_with_tasks(&[(1, "first", Status::Todo), (2, "second", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0; // focused on "first"
+
+        let moved = app.reorder_task_down();
+
+        assert!(moved);
+        // Focus cursor now points to position 1 (where "first" landed)
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 1);
+        // "second" is now first in the column
+        let col = app.tasks_for_column(Status::Todo);
+        assert_eq!(col[0].id, 2);
+        assert_eq!(col[1].id, 1);
+    }
+
+    // Reorder down: boundary no-op
+    #[test]
+    fn test_reorder_task_down_at_last_is_noop() {
+        let mut app = make_app_with_tasks(&[(1, "only", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0;
+
+        let moved = app.reorder_task_down();
+
+        assert!(!moved);
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    // Reorder only affects the focused column, not others
+    #[test]
+    fn test_reorder_does_not_affect_other_columns() {
+        let mut app = make_app_with_tasks(&[
+            (1, "todo-a", Status::Todo),
+            (2, "todo-b", Status::Todo),
+            (3, "doing-a", Status::Doing),
+        ]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0;
+        app.focused_card[Status::Doing.col_index()] = 0;
+
+        app.reorder_task_down();
+
+        // Doing column is unaffected
+        let doing = app.tasks_for_column(Status::Doing);
+        assert_eq!(doing.len(), 1);
+        assert_eq!(doing[0].id, 3);
+    }
+
+    // Reorder does not change task status
+    #[test]
+    fn test_reorder_preserves_task_status() {
+        let mut app =
+            make_app_with_tasks(&[(1, "first", Status::Doing), (2, "second", Status::Doing)]);
+        app.focused_col = Status::Doing.col_index();
+        app.focused_card[Status::Doing.col_index()] = 0;
+
+        app.reorder_task_down();
+
+        for task in &app.board.tasks {
+            assert_eq!(task.status, Status::Doing);
+        }
+    }
+
+    // Reorder up: normal swap
+    #[test]
+    fn test_reorder_task_up_swaps_and_follows_focus() {
+        let mut app =
+            make_app_with_tasks(&[(1, "first", Status::Todo), (2, "second", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 1; // focused on "second"
+
+        let moved = app.reorder_task_up();
+
+        assert!(moved);
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+        let col = app.tasks_for_column(Status::Todo);
+        assert_eq!(col[0].id, 2);
+        assert_eq!(col[1].id, 1);
+    }
+
+    // Reorder up: boundary no-op
+    #[test]
+    fn test_reorder_task_up_at_first_is_noop() {
+        let mut app = make_app_with_tasks(&[(1, "only", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0;
+
+        let moved = app.reorder_task_up();
+
+        assert!(!moved);
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
     }
 
     // ── Create task focuses new task ─────────────────────────────────────

@@ -201,7 +201,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut AppState) {
     let msg = app
         .status_msg
         .as_deref()
-        .unwrap_or("a:add  e:title  E:detail  Enter:→  BS:←  D:del  q:quit");
+        .unwrap_or("a:add  e:title  E:detail  Enter:→  BS:←  D:del  J/K:move  q:quit");
 
     let style = if app.status_msg.is_some() {
         Style::default().fg(Color::Red)

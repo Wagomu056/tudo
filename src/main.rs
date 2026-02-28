@@ -65,11 +65,24 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut AppState,
 ) -> io::Result<()> {
+    let mut reorder_save_pending = false;
+    let mut last_reorder_at: Option<std::time::Instant> = None;
+
     loop {
         app.clickable_urls.clear();
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if !event::poll(std::time::Duration::from_millis(200))? {
+            if reorder_save_pending
+                && last_reorder_at
+                    .map(|t| t.elapsed() >= std::time::Duration::from_secs(1))
+                    .unwrap_or(false)
+            {
+                if let Err(e) = storage::save_board(&mut app.board) {
+                    app.status_msg = Some(e.to_string());
+                }
+                reorder_save_pending = false;
+            }
             continue;
         }
 
@@ -78,13 +91,22 @@ fn run_app(
                 // ratatui handles resize on the next draw; no action needed
             }
             Event::Key(key) => {
-                // Quit shortcuts always work regardless of mode
+                // Quit shortcuts — flush pending reorder save before exit
                 if key.code == KeyCode::Char('q') && app.mode == AppMode::Normal {
+                    if reorder_save_pending {
+                        let _ = storage::save_board(&mut app.board);
+                    }
                     break;
                 }
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if reorder_save_pending {
+                        let _ = storage::save_board(&mut app.board);
+                    }
                     break;
                 }
+
+                let is_reorder = app.mode == AppMode::Normal
+                    && matches!(key.code, KeyCode::Char('J') | KeyCode::Char('K'));
 
                 match app.mode {
                     AppMode::Normal => handle_normal_key(app, key.code),
@@ -93,9 +115,15 @@ fn run_app(
                     }
                 }
 
-                // Persist after every mutation
-                if let Err(e) = storage::save_board(&mut app.board) {
-                    app.status_msg = Some(e.to_string());
+                if is_reorder {
+                    reorder_save_pending = true;
+                    last_reorder_at = Some(std::time::Instant::now());
+                } else {
+                    // Cancel debounce; the upcoming save captures all reorder changes too
+                    reorder_save_pending = false;
+                    if let Err(e) = storage::save_board(&mut app.board) {
+                        app.status_msg = Some(e.to_string());
+                    }
                 }
             }
             Event::Mouse(MouseEvent {
@@ -120,6 +148,12 @@ fn handle_normal_key(app: &mut AppState, code: KeyCode) {
         KeyCode::Char('j') | KeyCode::Down => app.move_down(),
         KeyCode::Char('a') => app.open_create(),
         KeyCode::Char('e') => app.open_edit_title(),
+        KeyCode::Char('J') => {
+            app.reorder_task_down();
+        }
+        KeyCode::Char('K') => {
+            app.reorder_task_up();
+        }
         KeyCode::Char('E') => app.open_edit_detail(),
         KeyCode::Enter => {
             // Capture id before mutation

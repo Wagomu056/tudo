@@ -36,6 +36,8 @@ cargo build --release
 | `Enter` | Advance task to next status |
 | `Backspace` | Move task to previous status |
 | `D` | Delete task |
+| `J` | Move task down within column |
+| `K` | Move task up within column |
 | `q` | Quit |
 | `Ctrl+C` | Quit |
 
