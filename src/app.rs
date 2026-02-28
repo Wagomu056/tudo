@@ -225,6 +225,7 @@ impl AppState {
             let id = self.board.alloc_id();
             let task = Task::new(id, value);
             self.board.tasks.push(task);
+            self.focus_task_by_id(id);
         } else {
             let id = match self.focused_task_id() {
                 Some(id) => id,
@@ -435,5 +436,30 @@ mod tests {
         assert_eq!(app.focused_card[Status::Checking.col_index()], 1);
         // Source column (Doing) is now empty; cursor clamped to 0
         assert_eq!(app.focused_card[Status::Doing.col_index()], 0);
+    }
+
+    // ── Create task focuses new task ─────────────────────────────────────
+
+    #[test]
+    fn test_create_task_focuses_new_task() {
+        let mut app = make_app_with_tasks(&[]);
+        app.focused_col = 2; // start on a different column
+        app.open_create();
+        app.input.buffer = "new task".to_string();
+        app.confirm_input();
+
+        assert_eq!(app.focused_col, Status::Todo.col_index());
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    #[test]
+    fn test_create_task_focuses_new_task_at_end_of_column() {
+        let mut app = make_app_with_tasks(&[(1, "existing", Status::Todo)]);
+        app.open_create();
+        app.input.buffer = "second task".to_string();
+        app.confirm_input();
+
+        assert_eq!(app.focused_col, Status::Todo.col_index());
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 1);
     }
 }
