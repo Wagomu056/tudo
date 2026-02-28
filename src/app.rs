@@ -1,6 +1,8 @@
 use chrono::Local;
 
-use crate::model::{AppError, AppMode, BoardState, DoneEntry, InputState, Status, Task};
+use crate::model::{
+    AppError, AppMode, BoardState, DoneEntry, InputState, Status, Task, UrlHitRegion,
+};
 
 pub const NUM_COLS: usize = 4;
 
@@ -16,6 +18,8 @@ pub struct AppState {
     pub input: InputState,
     /// Transient message shown in the status bar (errors, hints).
     pub status_msg: Option<String>,
+    /// URL hit regions computed during each render frame; cleared at frame start.
+    pub clickable_urls: Vec<UrlHitRegion>,
 }
 
 impl AppState {
@@ -27,6 +31,7 @@ impl AppState {
             mode: AppMode::Normal,
             input: InputState::default(),
             status_msg: None,
+            clickable_urls: Vec::new(),
         }
     }
 
@@ -265,6 +270,23 @@ impl AppState {
     pub fn set_error(&mut self, err: AppError) {
         self.status_msg = Some(err.to_string());
     }
+}
+
+// ── Mouse click handling ──────────────────────────────────────────────────────
+
+/// Handle a left mouse click at terminal position `(col, row)`.
+/// If the click falls within a URL hit region, opens the URL in the browser.
+/// Navigation state (`focused_col`, `focused_card`) is never mutated here.
+pub fn handle_left_click(app: &mut AppState, col: u16, row: u16) {
+    for region in &app.clickable_urls {
+        if row == region.row && col >= region.col_start && col < region.col_end {
+            if let Err(e) = crate::url::open_url(&region.url) {
+                app.status_msg = Some(format!("Cannot open URL: {e}"));
+            }
+            return;
+        }
+    }
+    // Non-URL click: silently ignored.
 }
 
 #[cfg(test)]

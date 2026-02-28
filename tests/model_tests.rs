@@ -1,5 +1,42 @@
 use tudo::app::AppState;
-use tudo::model::{BoardState, InputState, Status, Task};
+use tudo::model::{BoardState, InputState, Status, Task, UrlHitRegion};
+
+// ── T003: UrlHitRegion struct field accessibility ─────────────────────────────
+
+#[test]
+fn url_hit_region_fields_accessible() {
+    let r = UrlHitRegion {
+        row: 3,
+        col_start: 10,
+        col_end: 30,
+        url: "https://example.com".to_string(),
+    };
+    assert_eq!(r.row, 3u16);
+    assert_eq!(r.col_start, 10u16);
+    assert_eq!(r.col_end, 30u16);
+    assert_eq!(r.url, "https://example.com");
+}
+
+#[test]
+fn url_hit_region_derives_debug_clone_partialeq() {
+    let r = UrlHitRegion {
+        row: 1,
+        col_start: 0,
+        col_end: 5,
+        url: "http://x.com".to_string(),
+    };
+    let r2 = r.clone();
+    assert_eq!(r, r2);
+    let _ = format!("{:?}", r);
+}
+
+// ── T005: AppState::new() has empty clickable_urls ───────────────────────────
+
+#[test]
+fn appstate_new_has_empty_clickable_urls() {
+    let app = AppState::new(BoardState::default());
+    assert!(app.clickable_urls.is_empty());
+}
 
 // ── Status transition tests (T005) ──────────────────────────────────────────
 

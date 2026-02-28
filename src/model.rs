@@ -169,6 +169,16 @@ impl DoneEntry {
     }
 }
 
+// ── UrlHitRegion ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UrlHitRegion {
+    pub row: u16,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub url: String,
+}
+
 // ── AppMode ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]

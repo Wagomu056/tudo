@@ -8,10 +8,11 @@ use ratatui::{
 
 use crate::app::AppState;
 use crate::model::{AppMode, Status, ALL_STATUSES};
+use crate::url;
 
 // ── Top-level render ─────────────────────────────────────────────────────────
 
-pub fn render(frame: &mut Frame, app: &AppState) {
+pub fn render(frame: &mut Frame, app: &mut AppState) {
     let area = frame.area();
 
     // Guard: show warning if terminal is too small
@@ -57,6 +58,7 @@ pub fn render(frame: &mut Frame, app: &AppState) {
     }
 
     render_detail_panel(frame, detail_area, app);
+
     render_status_bar(frame, status_area, app);
 
     // Input popup overlay (drawn last so it appears on top)
@@ -70,18 +72,33 @@ pub fn render(frame: &mut Frame, app: &AppState) {
 fn render_column(
     frame: &mut Frame,
     area: Rect,
-    app: &AppState,
+    app: &mut AppState,
     status: Status,
     is_focused_col: bool,
 ) {
     let tasks = app.tasks_for_column(status);
     let focused_idx = app.focused_card[status.col_index()];
 
+    // Compute URL hit regions for each visible item before building ListItems.
+    // Item row: area.y + 1 (top border) + visual_index.
+    // Text starts at area.x + 1 (left border).
+    let max_title_chars = area.width.saturating_sub(4) as usize;
+    let text_x = area.x + 1;
+    let mut url_regions = Vec::new();
+    for (vi, task) in tasks.iter().enumerate() {
+        let title = truncate_str(&task.title, max_title_chars);
+        let item_row = area.y + 1 + vi as u16;
+        let regions = url::list_item_url_regions(&title, item_row, text_x);
+        url_regions.extend(regions);
+    }
+    app.clickable_urls.extend(url_regions);
+
+    let tasks = app.tasks_for_column(status);
     let items: Vec<ListItem> = tasks
         .iter()
         .enumerate()
         .map(|(i, task)| {
-            let title = truncate_str(&task.title, area.width.saturating_sub(4) as usize);
+            let title = truncate_str(&task.title, max_title_chars);
             let style = if is_focused_col && i == focused_idx {
                 Style::default()
                     .bg(Color::Blue)
@@ -120,9 +137,30 @@ fn render_column(
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
-fn render_detail_panel(frame: &mut Frame, area: Rect, app: &AppState) {
+fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    // Text content area: inside 1-cell border on each side.
+    let available_width = area.width.saturating_sub(2);
+    let text_base_col = area.x + 1;
+    // Row 0 of text = area.y + 1 (top border).
+    // We'll compute base_row per logical line below.
+
     let content = match app.focused_task() {
         Some(task) => {
+            // Compute detail URL regions if detail is non-empty.
+            // The detail text starts at text row 2 (title_line + blank line).
+            if !task.detail.is_empty() {
+                let detail_base_row = area.y + 1 + 2; // title + blank
+                let detail_text = task.detail.clone();
+                let regions = url::detail_url_regions(
+                    &detail_text,
+                    available_width,
+                    detail_base_row,
+                    text_base_col,
+                );
+                app.clickable_urls.extend(regions);
+            }
+
+            let task = app.focused_task().unwrap();
             let title_line = Line::from(vec![
                 Span::styled("Title: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(&task.title),
@@ -159,7 +197,7 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &AppState) {
 
 // ── Status bar ────────────────────────────────────────────────────────────────
 
-fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
+fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut AppState) {
     let msg = app
         .status_msg
         .as_deref()
@@ -177,7 +215,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &AppState) {
 
 // ── Input popup ───────────────────────────────────────────────────────────────
 
-pub fn render_input_popup(frame: &mut Frame, area: Rect, app: &AppState) {
+pub fn render_input_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
     let popup_area = centered_rect(60, 20, area);
 
     // Clear the background

@@ -2,13 +2,16 @@ use std::io;
 use std::panic;
 
 use ratatui::crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use tudo::app::AppState;
+use tudo::app::{handle_left_click, AppState};
 use tudo::model::{AppMode, BoardState};
 use tudo::storage;
 use tudo::ui;
@@ -63,6 +66,7 @@ fn run_app(
     app: &mut AppState,
 ) -> io::Result<()> {
     loop {
+        app.clickable_urls.clear();
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if !event::poll(std::time::Duration::from_millis(200))? {
@@ -91,6 +95,14 @@ fn run_app(
                 if let Err(e) = storage::save_board(&mut app.board) {
                     app.status_msg = Some(e.to_string());
                 }
+            }
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                ..
+            }) => {
+                handle_left_click(app, column, row);
             }
             _ => {}
         }
