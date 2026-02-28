@@ -20,20 +20,32 @@ fn temp_path(name: &str) -> PathBuf {
 #[test]
 fn resolve_data_dir_returns_ok() {
     let result = storage::resolve_data_dir();
-    assert!(result.is_ok(), "resolve_data_dir() should return Ok, got: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "resolve_data_dir() should return Ok, got: {:?}",
+        result
+    );
 }
 
 #[test]
 fn resolve_data_dir_creates_directory() {
     let path = storage::resolve_data_dir().expect("resolve_data_dir failed");
-    assert!(path.is_dir(), "data directory should exist on disk at {:?}", path);
+    assert!(
+        path.is_dir(),
+        "data directory should exist on disk at {:?}",
+        path
+    );
 }
 
 #[test]
 fn resolve_data_dir_path_ends_with_tudo() {
     let path = storage::resolve_data_dir().expect("resolve_data_dir failed");
     let last = path.file_name().expect("path should have a last component");
-    assert_eq!(last, "tudo", "last path component should be 'tudo', got {:?}", last);
+    assert_eq!(
+        last, "tudo",
+        "last path component should be 'tudo', got {:?}",
+        last
+    );
 }
 
 // ── US1: No CWD pollution (T004) ─────────────────────────────────────────────

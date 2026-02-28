@@ -54,9 +54,9 @@ pub fn load_board_from(path: &str) -> Result<BoardState, AppError> {
 pub fn load_board() -> Result<BoardState, AppError> {
     let data_dir = resolve_data_dir()?;
     let path = data_dir.join("current.log");
-    let path_str = path.to_str().ok_or_else(|| {
-        AppError::Other("data directory path is not valid UTF-8".to_string())
-    })?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| AppError::Other("data directory path is not valid UTF-8".to_string()))?;
     load_board_from(path_str)
 }
 
@@ -72,9 +72,9 @@ pub fn save_board_to(board: &mut BoardState, path: &str) -> Result<(), AppError>
 pub fn save_board(board: &mut BoardState) -> Result<(), AppError> {
     let data_dir = resolve_data_dir()?;
     let path = data_dir.join("current.log");
-    let path_str = path.to_str().ok_or_else(|| {
-        AppError::Other("data directory path is not valid UTF-8".to_string())
-    })?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| AppError::Other("data directory path is not valid UTF-8".to_string()))?;
     save_board_to(board, path_str)
 }
 

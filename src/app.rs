@@ -99,6 +99,7 @@ impl AppState {
                 }
             }
         }
+        self.focus_task_by_id(id);
         self.clamp_focus();
     }
 
@@ -116,6 +117,7 @@ impl AppState {
                 }
             }
         }
+        self.focus_task_by_id(id);
         self.clamp_focus();
     }
 
@@ -127,6 +129,22 @@ impl AppState {
         };
         self.board.tasks.retain(|t| t.id != id);
         self.clamp_focus();
+    }
+
+    /// Move `focused_col` and `focused_card` to follow the task with the given
+    /// id to its current (possibly new) column and position within that column.
+    fn focus_task_by_id(&mut self, id: u64) {
+        let status = match self.board.tasks.iter().find(|t| t.id == id) {
+            Some(task) => task.status,
+            None => return,
+        };
+        let col = status.col_index();
+        let pos = {
+            let col_tasks = self.tasks_for_column(status);
+            col_tasks.iter().position(|t| t.id == id).unwrap_or(0)
+        };
+        self.focused_col = col;
+        self.focused_card[col] = pos;
     }
 
     /// Clamp all per-column cursors so they remain within valid bounds.
@@ -246,5 +264,154 @@ impl AppState {
 
     pub fn set_error(&mut self, err: AppError) {
         self.status_msg = Some(err.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{BoardState, Status, Task};
+
+    // ── T001: Test helper ─────────────────────────────────────────────────
+
+    /// Build an AppState with the given tasks placed at the specified statuses.
+    /// `focused_col` and `focused_card` are set to column 0, index 0 by default;
+    /// tests adjust them as needed.
+    fn make_app_with_tasks(specs: &[(u64, &str, Status)]) -> AppState {
+        let tasks: Vec<Task> = specs
+            .iter()
+            .map(|&(id, title, status)| {
+                let mut t = Task::new(id, title.to_string());
+                t.status = status;
+                t
+            })
+            .collect();
+        let next_id = specs.iter().map(|s| s.0).max().unwrap_or(0) + 1;
+        AppState::new(BoardState::with_tasks(tasks, next_id))
+    }
+
+    // ── T003: US1 — advance keeps focus on task ───────────────────────────
+
+    #[test]
+    fn test_advance_status_keeps_focus_on_task() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Doing)]);
+        app.focused_col = Status::Doing.col_index();
+        app.focused_card[Status::Doing.col_index()] = 0;
+
+        app.advance_status();
+
+        assert_eq!(app.focused_col, Status::Checking.col_index());
+        assert_eq!(app.focused_card[Status::Checking.col_index()], 0);
+    }
+
+    // ── T004: US1 — advance tracks focus through all statuses ────────────
+
+    #[test]
+    fn test_advance_moves_focus_across_all_statuses() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0;
+
+        // Todo → Doing
+        app.advance_status();
+        assert_eq!(app.focused_col, Status::Doing.col_index());
+        assert_eq!(app.focused_card[Status::Doing.col_index()], 0);
+
+        // Doing → Checking
+        app.advance_status();
+        assert_eq!(app.focused_col, Status::Checking.col_index());
+        assert_eq!(app.focused_card[Status::Checking.col_index()], 0);
+
+        // Checking → Done
+        app.advance_status();
+        assert_eq!(app.focused_col, Status::Done.col_index());
+        assert_eq!(app.focused_card[Status::Done.col_index()], 0);
+    }
+
+    // ── T005: US1 — boundary at Done preserves focus (no-op) ─────────────
+
+    #[test]
+    fn test_advance_at_done_boundary_preserves_focus() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Done)]);
+        app.focused_col = Status::Done.col_index();
+        app.focused_card[Status::Done.col_index()] = 0;
+
+        app.advance_status();
+
+        assert_eq!(app.focused_col, Status::Done.col_index());
+        assert_eq!(app.focused_card[Status::Done.col_index()], 0);
+    }
+
+    // ── T009: US2 — retreat keeps focus on task ───────────────────────────
+
+    #[test]
+    fn test_retreat_status_keeps_focus_on_task() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Doing)]);
+        app.focused_col = Status::Doing.col_index();
+        app.focused_card[Status::Doing.col_index()] = 0;
+
+        app.retreat_status();
+
+        assert_eq!(app.focused_col, Status::Todo.col_index());
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    // ── T010: US2 — retreat tracks focus through all statuses ────────────
+
+    #[test]
+    fn test_retreat_moves_focus_across_all_statuses() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Done)]);
+        app.focused_col = Status::Done.col_index();
+        app.focused_card[Status::Done.col_index()] = 0;
+
+        // Done → Checking
+        app.retreat_status();
+        assert_eq!(app.focused_col, Status::Checking.col_index());
+        assert_eq!(app.focused_card[Status::Checking.col_index()], 0);
+
+        // Checking → Doing
+        app.retreat_status();
+        assert_eq!(app.focused_col, Status::Doing.col_index());
+        assert_eq!(app.focused_card[Status::Doing.col_index()], 0);
+
+        // Doing → Todo
+        app.retreat_status();
+        assert_eq!(app.focused_col, Status::Todo.col_index());
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    // ── T011: US2 — boundary at Todo preserves focus (no-op) ─────────────
+
+    #[test]
+    fn test_retreat_at_todo_boundary_preserves_focus() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0;
+
+        app.retreat_status();
+
+        assert_eq!(app.focused_col, Status::Todo.col_index());
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    // ── T015: Edge case — source column cursor clamped when emptied ───────
+
+    #[test]
+    fn test_source_column_clamped_when_last_task_moves_out() {
+        // T2 is inserted first → index 0 in Checking.
+        // T1 is in Doing → after advancing, T1 lands at index 1 in Checking.
+        let mut app =
+            make_app_with_tasks(&[(2, "other", Status::Checking), (1, "task", Status::Doing)]);
+        app.focused_col = Status::Doing.col_index();
+        app.focused_card[Status::Doing.col_index()] = 0;
+
+        // Advance T1: Doing → Checking
+        app.advance_status();
+
+        // Focus follows T1 into Checking at its insertion position (index 1)
+        assert_eq!(app.focused_col, Status::Checking.col_index());
+        assert_eq!(app.focused_card[Status::Checking.col_index()], 1);
+        // Source column (Doing) is now empty; cursor clamped to 0
+        assert_eq!(app.focused_card[Status::Doing.col_index()], 0);
     }
 }
