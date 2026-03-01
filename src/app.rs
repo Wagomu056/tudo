@@ -306,7 +306,13 @@ impl AppState {
         } else if self.input.is_create {
             let id = self.board.alloc_id();
             let task = Task::new(id, value);
-            self.board.tasks.push(task);
+            let insert_pos = self
+                .board
+                .tasks
+                .iter()
+                .position(|t| t.status == Status::Todo)
+                .unwrap_or(0);
+            self.board.tasks.insert(insert_pos, task);
             self.focus_task_by_id(id);
         } else {
             let id = match self.focused_task_id() {
@@ -962,13 +968,47 @@ mod tests {
     }
 
     #[test]
-    fn test_create_task_focuses_new_task_at_end_of_column() {
+    fn test_create_task_focuses_new_task_at_top_of_column() {
         let mut app = make_app_with_tasks(&[(1, "existing", Status::Todo)]);
         app.open_create();
-        app.input.buffer = "second task".to_string();
+        app.input.buffer = "new task".to_string();
         app.confirm_input();
 
+        // 新規タスクはカラムの先頭 (index 0) に配置される
         assert_eq!(app.focused_col, Status::Todo.col_index());
-        assert_eq!(app.focused_card[Status::Todo.col_index()], 1);
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    #[test]
+    fn test_create_task_placed_at_top_of_column_order() {
+        let mut app = make_app_with_tasks(&[(1, "existing", Status::Todo)]);
+        app.open_create();
+        app.input.buffer = "new task".to_string();
+        app.confirm_input();
+
+        // カラム内の順序を確認: 新規タスクが先頭
+        let col = app.tasks_for_column(Status::Todo);
+        assert_eq!(col[0].title, "new task");
+        assert_eq!(col[1].title, "existing");
+    }
+
+    #[test]
+    fn test_create_task_at_top_with_mixed_statuses() {
+        // Doing タスクが存在しても Todo カラムの先頭に挿入される
+        let mut app = make_app_with_tasks(&[
+            (1, "existing-todo", Status::Todo),
+            (2, "doing-task", Status::Doing),
+        ]);
+        app.open_create();
+        app.input.buffer = "newest".to_string();
+        app.confirm_input();
+
+        let col = app.tasks_for_column(Status::Todo);
+        assert_eq!(col[0].title, "newest");
+        assert_eq!(col[1].title, "existing-todo");
+        // Doing カラムは影響なし
+        let doing_col = app.tasks_for_column(Status::Doing);
+        assert_eq!(doing_col.len(), 1);
+        assert_eq!(doing_col[0].id, 2);
     }
 }
