@@ -12,7 +12,7 @@ use ratatui::crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use tudo::app::{handle_left_click, AppState};
-use tudo::model::{AppMode, BoardState};
+use tudo::model::{AppMode, BoardState, FocusArea};
 use tudo::storage;
 use tudo::ui;
 
@@ -106,6 +106,7 @@ fn run_app(
                 }
 
                 let is_reorder = app.mode == AppMode::Normal
+                    && app.focus_area == FocusArea::Kanban
                     && matches!(key.code, KeyCode::Char('J') | KeyCode::Char('K'));
 
                 match app.mode {
@@ -141,11 +142,27 @@ fn run_app(
 }
 
 fn handle_normal_key(app: &mut AppState, code: KeyCode) {
+    if app.focus_area == FocusArea::Memo {
+        match code {
+            KeyCode::Char('h') | KeyCode::Left => app.move_memo_left(),
+            KeyCode::Char('l') | KeyCode::Right => app.move_memo_right(),
+            KeyCode::Char('k') | KeyCode::Up => app.move_memo_up(),
+            KeyCode::Char('j') | KeyCode::Down => app.move_memo_down(),
+            KeyCode::Char('a') => app.open_create_memo(),
+            KeyCode::Char('e') => app.open_edit_memo_title(),
+            KeyCode::Char('E') => app.open_edit_memo_detail(),
+            KeyCode::Char('D') => app.delete_focused_memo(),
+            _ => {}
+        }
+        return;
+    }
+
+    // FocusArea::Kanban
     match code {
         KeyCode::Char('h') | KeyCode::Left => app.move_left(),
         KeyCode::Char('l') | KeyCode::Right => app.move_right(),
         KeyCode::Char('k') | KeyCode::Up => app.move_up(),
-        KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+        KeyCode::Char('j') | KeyCode::Down => app.kanban_try_move_down(),
         KeyCode::Char('a') => app.open_create(),
         KeyCode::Char('e') => app.open_edit_title(),
         KeyCode::Char('J') => {

@@ -109,7 +109,38 @@ impl Task {
     }
 }
 
+// ── Memo ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Memo {
+    pub id: u64,
+    pub title: String,
+    pub detail: String,
+}
+
+impl Memo {
+    pub fn new(id: u64, title: String) -> Self {
+        Memo {
+            id,
+            title,
+            detail: String::new(),
+        }
+    }
+}
+
+// ── FocusArea ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FocusArea {
+    Kanban,
+    Memo,
+}
+
 // ── BoardState ───────────────────────────────────────────────────────────────
+
+fn default_next_memo_id() -> u64 {
+    1
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardState {
@@ -117,6 +148,10 @@ pub struct BoardState {
     pub next_id: u64,
     pub tasks: Vec<Task>,
     pub saved_at: DateTime<Local>,
+    #[serde(default)]
+    pub memos: Vec<Memo>,
+    #[serde(default = "default_next_memo_id")]
+    pub next_memo_id: u64,
 }
 
 impl Default for BoardState {
@@ -126,6 +161,8 @@ impl Default for BoardState {
             next_id: 1,
             tasks: Vec::new(),
             saved_at: Local::now(),
+            memos: Vec::new(),
+            next_memo_id: 1,
         }
     }
 }
@@ -139,6 +176,8 @@ impl BoardState {
             next_id,
             tasks,
             saved_at: Local::now(),
+            memos: Vec::new(),
+            next_memo_id: 1,
         }
     }
 
@@ -146,6 +185,13 @@ impl BoardState {
     pub fn alloc_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
+        id
+    }
+
+    /// Allocate a new unique memo ID and advance the counter.
+    pub fn alloc_memo_id(&mut self) -> u64 {
+        let id = self.next_memo_id;
+        self.next_memo_id += 1;
         id
     }
 }
@@ -194,6 +240,7 @@ pub enum AppMode {
 pub struct InputState {
     pub buffer: String,
     pub is_create: bool,
+    pub is_memo: bool,
 }
 
 impl InputState {
@@ -212,9 +259,10 @@ impl InputState {
         &self.buffer
     }
 
-    /// Reset the buffer to empty.
+    /// Reset the buffer and memo flag to defaults.
     pub fn clear(&mut self) {
         self.buffer.clear();
+        self.is_memo = false;
     }
 }
 

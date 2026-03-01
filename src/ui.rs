@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::AppState;
-use crate::model::{AppMode, Status, ALL_STATUSES};
+use crate::model::{AppMode, FocusArea, Status, ALL_STATUSES};
 use crate::url;
 
 // ── Top-level render ─────────────────────────────────────────────────────────
@@ -15,9 +15,9 @@ use crate::url;
 pub fn render(frame: &mut Frame, app: &mut AppState) {
     let area = frame.area();
 
-    // Guard: show warning if terminal is too small
-    if area.width < 40 || area.height < 10 {
-        let warning = Paragraph::new("Terminal too small.\nMinimum: 40×10")
+    // Guard: show warning if terminal is too small (memo panel needs extra height)
+    if area.width < 40 || area.height < 12 {
+        let warning = Paragraph::new("Terminal too small.\nMinimum: 40×12")
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::Yellow));
         frame.render_widget(warning, area);
@@ -42,6 +42,15 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     let kanban_area = cols[0];
     let detail_area = cols[1];
 
+    // Vertical split of kanban_area: columns (80%) + memo panel (20%)
+    let kanban_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+        .split(kanban_area);
+
+    let columns_area = kanban_rows[0];
+    let memo_area = kanban_rows[1];
+
     // Equal 4-column split
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -51,12 +60,19 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             Constraint::Ratio(1, 4),
             Constraint::Ratio(1, 4),
         ])
-        .split(kanban_area);
+        .split(columns_area);
 
     for (i, &status) in ALL_STATUSES.iter().enumerate() {
-        render_column(frame, columns[i], app, status, i == app.focused_col);
+        render_column(
+            frame,
+            columns[i],
+            app,
+            status,
+            i == app.focused_col && app.focus_area == FocusArea::Kanban,
+        );
     }
 
+    render_memo_panel(frame, memo_area, app);
     render_detail_panel(frame, detail_area, app);
 
     render_status_bar(frame, status_area, app);
@@ -135,52 +151,164 @@ fn render_column(
     frame.render_widget(list, area);
 }
 
+// ── Memo panel ────────────────────────────────────────────────────────────────
+
+const MEMO_ITEM_WIDTH: u16 = 24;
+
+fn render_memo_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
+    // Compute items-per-row and cache in AppState for navigation
+    let items_per_row = (area.width / MEMO_ITEM_WIDTH).max(1);
+    app.memo_cols = items_per_row as usize;
+
+    let is_focused = app.focus_area == FocusArea::Memo;
+    let border_style = if is_focused {
+        Style::default().fg(Color::Blue)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Memo ",
+            if is_focused {
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            },
+        ))
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    // Inner area for item rendering
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let item_w = MEMO_ITEM_WIDTH;
+    let item_h: u16 = 1;
+
+    for (idx, memo) in app.board.memos.iter().enumerate() {
+        let row = (idx as u16) / items_per_row;
+        let col = (idx as u16) % items_per_row;
+
+        let y = inner.y + row * item_h;
+        let x = inner.x + col * item_w;
+
+        // Stop rendering if beyond panel height
+        if y >= inner.y + inner.height {
+            break;
+        }
+
+        let cell_rect = Rect {
+            x,
+            y,
+            width: item_w.min(inner.x + inner.width - x),
+            height: item_h,
+        };
+
+        let style = if is_focused && idx == app.focused_memo {
+            Style::default()
+                .bg(Color::Blue)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let title = truncate_str(&memo.title, (item_w.saturating_sub(1)) as usize);
+        let widget = Paragraph::new(title).style(style);
+        frame.render_widget(widget, cell_rect);
+    }
+}
+
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
 fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
     // Text content area: inside 1-cell border on each side.
     let available_width = area.width.saturating_sub(2);
     let text_base_col = area.x + 1;
-    // Row 0 of text = area.y + 1 (top border).
-    // We'll compute base_row per logical line below.
 
-    let content = match app.focused_task() {
-        Some(task) => {
-            // Compute detail URL regions if detail is non-empty.
-            // The detail text starts at text row 2 (title_line + blank line).
-            if !task.detail.is_empty() {
-                let detail_base_row = area.y + 1 + 2; // title + blank
-                let detail_text = task.detail.clone();
-                let regions = url::detail_url_regions(
-                    &detail_text,
-                    available_width,
-                    detail_base_row,
-                    text_base_col,
-                );
-                app.clickable_urls.extend(regions);
-            }
-
-            let task = app.focused_task().unwrap();
-            let title_line = Line::from(vec![
-                Span::styled("Title: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(&task.title),
-            ]);
-            let detail_text = if task.detail.is_empty() {
-                vec![
-                    title_line,
-                    Line::raw(""),
-                    Line::styled("(no detail)", Style::default().fg(Color::DarkGray)),
-                ]
-            } else {
-                let mut lines = vec![title_line, Line::raw("")];
-                for dl in task.detail.split('\n') {
-                    lines.push(Line::raw(dl.to_string()));
+    let content = if app.focus_area == FocusArea::Memo {
+        match app.focused_memo_item() {
+            Some(memo) => {
+                // Compute detail URL regions if detail is non-empty.
+                if !memo.detail.is_empty() {
+                    let detail_base_row = area.y + 1 + 2; // title + blank
+                    let detail_text = memo.detail.clone();
+                    let regions = url::detail_url_regions(
+                        &detail_text,
+                        available_width,
+                        detail_base_row,
+                        text_base_col,
+                    );
+                    app.clickable_urls.extend(regions);
                 }
-                lines
-            };
-            Text::from(detail_text)
+
+                let memo = app.focused_memo_item().unwrap();
+                let title_line = Line::from(vec![
+                    Span::styled("Title: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(memo.title.clone()),
+                ]);
+                let lines = if memo.detail.is_empty() {
+                    vec![
+                        title_line,
+                        Line::raw(""),
+                        Line::styled("(no detail)", Style::default().fg(Color::DarkGray)),
+                    ]
+                } else {
+                    let mut lines = vec![title_line, Line::raw("")];
+                    for dl in memo.detail.split('\n') {
+                        lines.push(Line::raw(dl.to_string()));
+                    }
+                    lines
+                };
+                Text::from(lines)
+            }
+            None => Text::styled("No memo selected", Style::default().fg(Color::DarkGray)),
         }
-        None => Text::styled("No task selected", Style::default().fg(Color::DarkGray)),
+    } else {
+        match app.focused_task() {
+            Some(task) => {
+                // Compute detail URL regions if detail is non-empty.
+                if !task.detail.is_empty() {
+                    let detail_base_row = area.y + 1 + 2; // title + blank
+                    let detail_text = task.detail.clone();
+                    let regions = url::detail_url_regions(
+                        &detail_text,
+                        available_width,
+                        detail_base_row,
+                        text_base_col,
+                    );
+                    app.clickable_urls.extend(regions);
+                }
+
+                let task = app.focused_task().unwrap();
+                let title_line = Line::from(vec![
+                    Span::styled("Title: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(&task.title),
+                ]);
+                let detail_text = if task.detail.is_empty() {
+                    vec![
+                        title_line,
+                        Line::raw(""),
+                        Line::styled("(no detail)", Style::default().fg(Color::DarkGray)),
+                    ]
+                } else {
+                    let mut lines = vec![title_line, Line::raw("")];
+                    for dl in task.detail.split('\n') {
+                        lines.push(Line::raw(dl.to_string()));
+                    }
+                    lines
+                };
+                Text::from(detail_text)
+            }
+            None => Text::styled("No task selected", Style::default().fg(Color::DarkGray)),
+        }
     };
 
     let panel = Paragraph::new(content)
@@ -198,10 +326,13 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
 // ── Status bar ────────────────────────────────────────────────────────────────
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &mut AppState) {
-    let msg = app
-        .status_msg
-        .as_deref()
-        .unwrap_or("a:add  e:title  E:detail  Enter:→  BS:←  D:del  J/K:move  q:quit");
+    let default_hint = if app.focus_area == FocusArea::Memo {
+        "a:add  e:title  E:detail  D:del  hjkl:nav  k:back  q:quit"
+    } else {
+        "a:add  e:title  E:detail  Enter:→  BS:←  D:del  J/K:move  j:memo  q:quit"
+    };
+
+    let msg = app.status_msg.as_deref().unwrap_or(default_hint);
 
     let style = if app.status_msg.is_some() {
         Style::default().fg(Color::Red)
@@ -221,11 +352,14 @@ pub fn render_input_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
     // Clear the background
     frame.render_widget(Clear, popup_area);
 
-    let title = match app.mode {
-        AppMode::InputTitle if app.input.is_create => " Add Task ",
-        AppMode::InputTitle => " Edit Title ",
-        AppMode::InputDetail => " Edit Detail ",
-        AppMode::Normal => unreachable!(),
+    let title = match (app.mode.clone(), app.input.is_memo, app.input.is_create) {
+        (AppMode::InputTitle, true, true) => " Add Memo ",
+        (AppMode::InputTitle, true, false) => " Edit Memo Title ",
+        (AppMode::InputDetail, true, _) => " Edit Memo Detail ",
+        (AppMode::InputTitle, false, true) => " Add Task ",
+        (AppMode::InputTitle, false, false) => " Edit Title ",
+        (AppMode::InputDetail, false, _) => " Edit Detail ",
+        (AppMode::Normal, _, _) => unreachable!(),
     };
 
     let display = format!("{}_", app.input.value()); // trailing _ simulates cursor

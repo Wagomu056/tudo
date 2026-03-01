@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
-use tudo::model::{BoardState, DoneEntry, Status, Task};
+use tudo::model::{BoardState, DoneEntry, Memo, Status, Task};
 use tudo::storage;
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -197,6 +197,29 @@ fn append_done_entry_writes_two_json_lines() {
     assert_eq!(v1["title"], "First");
     assert_eq!(v2["title"], "Second");
     assert_eq!(v2["detail"], "detail text");
+}
+
+// ── T005: save_and_load_board_with_memos ────────────────────────────────────
+
+#[test]
+fn save_and_load_board_with_memos() {
+    let path = temp_path("current_memos.log");
+    let path_str = path.to_str().unwrap();
+
+    let mut board = BoardState::default();
+    let mut m = Memo::new(1, "Rate limit".to_string());
+    m.detail = "100 req/min".to_string();
+    board.memos.push(m);
+    board.next_memo_id = 2;
+
+    storage::save_board_to(&mut board, path_str).expect("save board");
+    let loaded = storage::load_board_from(path_str).expect("load board");
+
+    assert_eq!(loaded.memos.len(), 1);
+    assert_eq!(loaded.memos[0].id, 1);
+    assert_eq!(loaded.memos[0].title, "Rate limit");
+    assert_eq!(loaded.memos[0].detail, "100 req/min");
+    assert_eq!(loaded.next_memo_id, 2);
 }
 
 // ── Daily Done filter (T035) ──────────────────────────────────────────────────

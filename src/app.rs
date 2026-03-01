@@ -1,7 +1,8 @@
 use chrono::Local;
 
 use crate::model::{
-    AppError, AppMode, BoardState, DoneEntry, InputState, Status, Task, UrlHitRegion,
+    AppError, AppMode, BoardState, DoneEntry, FocusArea, InputState, Memo, Status, Task,
+    UrlHitRegion,
 };
 
 pub const NUM_COLS: usize = 4;
@@ -20,6 +21,12 @@ pub struct AppState {
     pub status_msg: Option<String>,
     /// URL hit regions computed during each render frame; cleared at frame start.
     pub clickable_urls: Vec<UrlHitRegion>,
+    /// Whether keyboard focus is in the kanban columns or the memo panel.
+    pub focus_area: FocusArea,
+    /// Flat index into `board.memos` for the focused memo item.
+    pub focused_memo: usize,
+    /// Cached items-per-row from the last render frame (default 4).
+    pub memo_cols: usize,
 }
 
 impl AppState {
@@ -32,6 +39,9 @@ impl AppState {
             input: InputState::default(),
             status_msg: None,
             clickable_urls: Vec::new(),
+            focus_area: FocusArea::Kanban,
+            focused_memo: 0,
+            memo_cols: 4,
         }
     }
 
@@ -56,6 +66,23 @@ impl AppState {
     /// ID of the focused task, if any.
     fn focused_task_id(&self) -> Option<u64> {
         self.focused_task().map(|t| t.id)
+    }
+
+    // ── Memo helpers ──────────────────────────────────────────────────────
+
+    /// Return a reference to the currently focused memo item, if any.
+    pub fn focused_memo_item(&self) -> Option<&Memo> {
+        self.board.memos.get(self.focused_memo)
+    }
+
+    /// Clamp `focused_memo` so it stays within valid bounds.
+    pub fn clamp_memo_focus(&mut self) {
+        let len = self.board.memos.len();
+        if len == 0 {
+            self.focused_memo = 0;
+        } else if self.focused_memo >= len {
+            self.focused_memo = len - 1;
+        }
     }
 
     // ── Navigation ────────────────────────────────────────────────────────
@@ -212,6 +239,43 @@ impl AppState {
         self.status_msg = None;
     }
 
+    /// Open the title-input popup for creating a new memo (a key in Memo focus).
+    pub fn open_create_memo(&mut self) {
+        self.input.clear();
+        self.input.is_create = true;
+        self.input.is_memo = true;
+        self.mode = AppMode::InputTitle;
+        self.status_msg = None;
+    }
+
+    /// Open the title-edit popup for the focused memo (e key in Memo focus).
+    pub fn open_edit_memo_title(&mut self) {
+        let title = match self.focused_memo_item() {
+            Some(m) => m.title.clone(),
+            None => return,
+        };
+        self.input.clear();
+        self.input.buffer = title;
+        self.input.is_create = false;
+        self.input.is_memo = true;
+        self.mode = AppMode::InputTitle;
+        self.status_msg = None;
+    }
+
+    /// Open the detail-edit popup for the focused memo (E key in Memo focus).
+    pub fn open_edit_memo_detail(&mut self) {
+        let detail = match self.focused_memo_item() {
+            Some(m) => m.detail.clone(),
+            None => return,
+        };
+        self.input.clear();
+        self.input.buffer = detail;
+        self.input.is_create = false;
+        self.input.is_memo = true;
+        self.mode = AppMode::InputDetail;
+        self.status_msg = None;
+    }
+
     /// Confirm the input popup (Enter key in Input mode).
     pub fn confirm_input(&mut self) {
         let value = self.input.value().trim().to_string();
@@ -221,7 +285,25 @@ impl AppState {
             return;
         }
 
-        if self.input.is_create {
+        if self.input.is_memo {
+            if self.input.is_create {
+                let id = self.board.alloc_memo_id();
+                let memo = Memo::new(id, value);
+                self.board.memos.push(memo);
+                self.focused_memo = self.board.memos.len() - 1;
+                self.focus_area = FocusArea::Memo;
+            } else {
+                let idx = self.focused_memo;
+                let is_detail = self.mode == AppMode::InputDetail;
+                if let Some(memo) = self.board.memos.get_mut(idx) {
+                    if is_detail {
+                        memo.detail = value;
+                    } else {
+                        memo.title = value;
+                    }
+                }
+            }
+        } else if self.input.is_create {
             let id = self.board.alloc_id();
             let task = Task::new(id, value);
             self.board.tasks.push(task);
@@ -252,6 +334,67 @@ impl AppState {
     pub fn cancel_input(&mut self) {
         self.input.clear();
         self.mode = AppMode::Normal;
+    }
+
+    // ── Reorder within column ─────────────────────────────────────────────
+
+    // ── Memo navigation ───────────────────────────────────────────────────
+
+    /// Move down within the kanban column; if already at the bottom (or column
+    /// is empty), switch focus to the memo panel.
+    pub fn kanban_try_move_down(&mut self) {
+        let status = crate::model::ALL_STATUSES[self.focused_col];
+        let len = self.tasks_for_column(status).len();
+        let at_bottom = len == 0 || self.focused_card[self.focused_col] + 1 >= len;
+        if at_bottom {
+            self.focus_area = FocusArea::Memo;
+            self.clamp_memo_focus();
+        } else {
+            self.move_down();
+        }
+    }
+
+    /// Move memo focus one item to the left (no-op at index 0).
+    pub fn move_memo_left(&mut self) {
+        if self.focused_memo > 0 {
+            self.focused_memo -= 1;
+        }
+    }
+
+    /// Move memo focus one item to the right (no-op at last item).
+    pub fn move_memo_right(&mut self) {
+        if !self.board.memos.is_empty() && self.focused_memo + 1 < self.board.memos.len() {
+            self.focused_memo += 1;
+        }
+    }
+
+    /// Move memo focus up by one row. If already on the first row, return to
+    /// kanban focus.
+    pub fn move_memo_up(&mut self) {
+        if self.focused_memo < self.memo_cols {
+            self.focus_area = FocusArea::Kanban;
+        } else {
+            self.focused_memo -= self.memo_cols;
+        }
+    }
+
+    /// Move memo focus down by one row (no-op if already on the last row).
+    pub fn move_memo_down(&mut self) {
+        let next = self.focused_memo + self.memo_cols;
+        if next < self.board.memos.len() {
+            self.focused_memo = next;
+        }
+    }
+
+    // ── Memo CRUD ─────────────────────────────────────────────────────────
+
+    /// Delete the focused memo (no-op if list is empty), then clamp focus.
+    pub fn delete_focused_memo(&mut self) {
+        if self.board.memos.is_empty() {
+            return;
+        }
+        self.board.memos.remove(self.focused_memo);
+        self.clamp_memo_focus();
     }
 
     // ── Reorder within column ─────────────────────────────────────────────
@@ -349,7 +492,7 @@ pub fn handle_left_click(app: &mut AppState, col: u16, row: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BoardState, Status, Task};
+    use crate::model::{BoardState, FocusArea, Memo, Status, Task};
 
     // ── T001: Test helper ─────────────────────────────────────────────────
 
@@ -591,6 +734,217 @@ mod tests {
 
         assert!(!moved);
         assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    // ── US1 tests: Memo create/edit ──────────────────────────────────────
+
+    // T012: memo_create_adds_to_board
+    #[test]
+    fn memo_create_adds_to_board() {
+        let mut app = make_app_with_tasks(&[]);
+        app.open_create_memo();
+        app.input.buffer = "Buy milk".to_string();
+        app.confirm_input();
+        assert_eq!(app.board.memos.len(), 1);
+        assert_eq!(app.board.memos[0].title, "Buy milk");
+    }
+
+    // T013: memo_create_focuses_new_memo
+    #[test]
+    fn memo_create_focuses_new_memo() {
+        let mut app = make_app_with_tasks(&[]);
+        app.open_create_memo();
+        app.input.buffer = "Buy milk".to_string();
+        app.confirm_input();
+        assert_eq!(app.focus_area, FocusArea::Memo);
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    // T014: memo_create_empty_title_rejected
+    #[test]
+    fn memo_create_empty_title_rejected() {
+        let mut app = make_app_with_tasks(&[]);
+        app.open_create_memo();
+        app.input.buffer = "  ".to_string();
+        app.confirm_input();
+        assert!(app.board.memos.is_empty());
+        assert!(app.status_msg.is_some());
+    }
+
+    // T015: memo_edit_title
+    #[test]
+    fn memo_edit_title() {
+        let mut app = make_app_with_tasks(&[]);
+        app.board.memos.push(Memo::new(1, "Original".to_string()));
+        app.board.next_memo_id = 2;
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.open_edit_memo_title();
+        app.input.buffer = "Updated".to_string();
+        app.confirm_input();
+        assert_eq!(app.board.memos[0].title, "Updated");
+    }
+
+    // T016: memo_edit_detail
+    #[test]
+    fn memo_edit_detail() {
+        let mut app = make_app_with_tasks(&[]);
+        app.board.memos.push(Memo::new(1, "A memo".to_string()));
+        app.board.next_memo_id = 2;
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.open_edit_memo_detail();
+        app.input.buffer = "Some detail".to_string();
+        app.confirm_input();
+        assert_eq!(app.board.memos[0].detail, "Some detail");
+    }
+
+    // ── US2 tests: Navigation ─────────────────────────────────────────────
+
+    fn make_app_with_memos(titles: &[&str]) -> AppState {
+        let mut app = AppState::new(BoardState::default());
+        for (i, &title) in titles.iter().enumerate() {
+            app.board
+                .memos
+                .push(Memo::new(i as u64 + 1, title.to_string()));
+        }
+        app.board.next_memo_id = titles.len() as u64 + 1;
+        app
+    }
+
+    // T022: memo_enter_from_kanban_bottom
+    #[test]
+    fn memo_enter_from_kanban_bottom() {
+        let mut app = make_app_with_tasks(&[(1, "task", Status::Todo)]);
+        app.focused_col = 0;
+        app.focused_card[0] = 0;
+        app.kanban_try_move_down();
+        assert_eq!(app.focus_area, FocusArea::Memo);
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    // T023: memo_enter_from_empty_kanban_column
+    #[test]
+    fn memo_enter_from_empty_kanban_column() {
+        let mut app = make_app_with_tasks(&[]);
+        app.focused_col = 0;
+        app.kanban_try_move_down();
+        assert_eq!(app.focus_area, FocusArea::Memo);
+    }
+
+    // T024: memo_exit_to_kanban_from_first_row
+    #[test]
+    fn memo_exit_to_kanban_from_first_row() {
+        let mut app = make_app_with_memos(&["A"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.memo_cols = 4;
+        app.move_memo_up();
+        assert_eq!(app.focus_area, FocusArea::Kanban);
+    }
+
+    // T025: memo_move_right_advances_index and boundary
+    #[test]
+    fn memo_move_right_advances_index() {
+        let mut app = make_app_with_memos(&["A", "B", "C"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.move_memo_right();
+        assert_eq!(app.focused_memo, 1);
+    }
+
+    #[test]
+    fn memo_move_right_boundary_noop() {
+        let mut app = make_app_with_memos(&["A", "B"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 1;
+        app.move_memo_right();
+        assert_eq!(app.focused_memo, 1);
+    }
+
+    // T026: memo_move_left_decrements_index and boundary
+    #[test]
+    fn memo_move_left_decrements_index() {
+        let mut app = make_app_with_memos(&["A", "B"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 1;
+        app.move_memo_left();
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    #[test]
+    fn memo_move_left_boundary_noop() {
+        let mut app = make_app_with_memos(&["A", "B"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.move_memo_left();
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    // T027: memo_move_down_advances_by_memo_cols and last_row_noop
+    #[test]
+    fn memo_move_down_advances_by_memo_cols() {
+        let mut app = make_app_with_memos(&["A", "B", "C", "D"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.memo_cols = 3;
+        app.move_memo_down();
+        assert_eq!(app.focused_memo, 3);
+    }
+
+    #[test]
+    fn memo_move_down_last_row_noop() {
+        let mut app = make_app_with_memos(&["A", "B", "C"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.memo_cols = 3;
+        app.move_memo_down(); // index 0 + 3 = 3, but len=3, so noop
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    // T028: memo_move_up_row_subtracts_memo_cols
+    #[test]
+    fn memo_move_up_row_subtracts_memo_cols() {
+        let mut app = make_app_with_memos(&["A", "B", "C", "D"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 3;
+        app.memo_cols = 3;
+        app.move_memo_up();
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    // ── US3 tests: Delete ─────────────────────────────────────────────────
+
+    // T033: memo_delete_removes_correct_item
+    #[test]
+    fn memo_delete_removes_correct_item() {
+        let mut app = make_app_with_memos(&["A", "B"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.delete_focused_memo();
+        assert_eq!(app.board.memos.len(), 1);
+        assert_eq!(app.board.memos[0].id, 2);
+    }
+
+    // T034: memo_delete_clamps_focus
+    #[test]
+    fn memo_delete_clamps_focus() {
+        let mut app = make_app_with_memos(&["A", "B"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 1;
+        app.delete_focused_memo();
+        assert_eq!(app.focused_memo, 0);
+    }
+
+    // T035: memo_delete_last_item_leaves_empty
+    #[test]
+    fn memo_delete_last_item_leaves_empty() {
+        let mut app = make_app_with_memos(&["A"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.delete_focused_memo();
+        assert!(app.board.memos.is_empty());
+        assert_eq!(app.focused_memo, 0);
     }
 
     // ── Create task focuses new task ─────────────────────────────────────

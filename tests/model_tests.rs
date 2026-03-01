@@ -1,5 +1,49 @@
 use tudo::app::AppState;
-use tudo::model::{BoardState, InputState, Status, Task, UrlHitRegion};
+use tudo::model::{BoardState, InputState, Memo, Status, Task, UrlHitRegion};
+
+// ── T002: memo_new_has_correct_fields ────────────────────────────────────────
+
+#[test]
+fn memo_new_has_correct_fields() {
+    let m = Memo::new(1, "title".to_string());
+    assert_eq!(m.id, 1);
+    assert_eq!(m.title, "title");
+    assert_eq!(m.detail, "");
+}
+
+// ── T003 (model): board_state_with_memos_round_trips ─────────────────────────
+
+#[test]
+fn board_state_with_memos_round_trips() {
+    let mut board = BoardState::default();
+    board.memos.push(Memo::new(1, "Alpha".to_string()));
+    let mut m2 = Memo::new(2, "Beta".to_string());
+    m2.detail = "some detail".to_string();
+    board.memos.push(m2);
+    board.next_memo_id = 3;
+
+    let json = serde_json::to_string(&board).expect("serialize");
+    let loaded: BoardState = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(loaded.memos.len(), 2);
+    assert_eq!(loaded.memos[0].id, 1);
+    assert_eq!(loaded.memos[0].title, "Alpha");
+    assert_eq!(loaded.memos[0].detail, "");
+    assert_eq!(loaded.memos[1].id, 2);
+    assert_eq!(loaded.memos[1].title, "Beta");
+    assert_eq!(loaded.memos[1].detail, "some detail");
+    assert_eq!(loaded.next_memo_id, 3);
+}
+
+// ── T004: board_state_missing_memos_field_deserializes_to_empty ──────────────
+
+#[test]
+fn board_state_missing_memos_field_deserializes_to_empty() {
+    let json = r#"{"version":1,"next_id":1,"tasks":[],"saved_at":"2026-03-01T00:00:00+09:00"}"#;
+    let board: BoardState = serde_json::from_str(json).expect("deserialize");
+    assert!(board.memos.is_empty());
+    assert_eq!(board.next_memo_id, 1);
+}
 
 // ── T003: UrlHitRegion struct field accessibility ─────────────────────────────
 
