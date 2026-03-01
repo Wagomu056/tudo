@@ -95,17 +95,22 @@ fn render_column(
     let tasks = app.tasks_for_column(status);
     let focused_idx = app.focused_card[status.col_index()];
 
-    // Compute URL hit regions for each visible item before building ListItems.
-    // Item row: area.y + 1 (top border) + visual_index.
+    // Compute URL hit regions and build wrapped ListItems.
     // Text starts at area.x + 1 (left border).
     let max_title_chars = area.width.saturating_sub(4) as usize;
     let text_x = area.x + 1;
+    let mut cumulative_rows: u16 = 0;
     let mut url_regions = Vec::new();
     for (vi, task) in tasks.iter().enumerate() {
-        let title = truncate_str(&task.title, max_title_chars);
-        let item_row = area.y + 1 + vi as u16;
-        let regions = url::list_item_url_regions(&title, item_row, text_x);
-        url_regions.extend(regions);
+        let _ = vi;
+        let wrapped = wrap_str(&task.title, max_title_chars);
+        let item_row = area.y + 1 + cumulative_rows;
+        for (line_idx, line) in wrapped.iter().enumerate() {
+            let row = item_row + line_idx as u16;
+            let regions = url::list_item_url_regions(line, row, text_x);
+            url_regions.extend(regions);
+        }
+        cumulative_rows += wrapped.len() as u16;
     }
     app.clickable_urls.extend(url_regions);
 
@@ -114,7 +119,9 @@ fn render_column(
         .iter()
         .enumerate()
         .map(|(i, task)| {
-            let title = truncate_str(&task.title, max_title_chars);
+            let wrapped = wrap_str(&task.title, max_title_chars);
+            let lines: Vec<Line> = wrapped.into_iter().map(Line::raw).collect();
+            let text = Text::from(lines);
             let style = if is_focused_col && i == focused_idx {
                 Style::default()
                     .bg(Color::Blue)
@@ -123,7 +130,7 @@ fn render_column(
             } else {
                 Style::default()
             };
-            ListItem::new(title).style(style)
+            ListItem::new(text).style(style)
         })
         .collect();
 
@@ -396,6 +403,18 @@ pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - pct_x) / 2),
         ])
         .split(vert[1])[1]
+}
+
+/// Wrap a string into lines of at most `max_chars` characters (Unicode-aware).
+fn wrap_str(s: &str, max_chars: usize) -> Vec<String> {
+    if max_chars == 0 {
+        return vec![s.to_string()];
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        return vec![s.to_string()];
+    }
+    chars.chunks(max_chars).map(|c| c.iter().collect()).collect()
 }
 
 /// Truncate a string to at most `max_chars` characters (Unicode-aware).
