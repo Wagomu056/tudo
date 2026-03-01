@@ -6,6 +6,8 @@ use ratatui::{
     Frame,
 };
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::app::AppState;
 use crate::model::{AppMode, FocusArea, Status, TaskHitRegion, MemoHitRegion, ALL_STATUSES};
 use crate::url;
@@ -426,25 +428,151 @@ pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
         .split(vert[1])[1]
 }
 
-/// Wrap a string into lines of at most `max_chars` characters (Unicode-aware).
-fn wrap_str(s: &str, max_chars: usize) -> Vec<String> {
-    if max_chars == 0 {
+/// Wrap a string into lines whose display width is at most `max_width` columns.
+/// CJK / full-width characters count as 2 columns.
+fn wrap_str(s: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
         return vec![s.to_string()];
     }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        return vec![s.to_string()];
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut width = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if width + cw > max_width && !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+            width = 0;
+        }
+        line.push(ch);
+        width += cw;
     }
-    chars.chunks(max_chars).map(|c| c.iter().collect()).collect()
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
-/// Truncate a string to at most `max_chars` characters (Unicode-aware).
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-        out.push('…');
-        out
+/// Truncate a string so its display width is at most `max_width` columns.
+/// CJK / full-width characters count as 2 columns.
+fn truncate_str(s: &str, max_width: usize) -> String {
+    let mut width = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if width + cw > max_width {
+            if max_width >= 1 {
+                out.push('…');
+            }
+            return out;
+        }
+        out.push(ch);
+        width += cw;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── wrap_str ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_ascii_short_no_wrap() {
+        assert_eq!(wrap_str("hello", 10), vec!["hello"]);
+    }
+
+    #[test]
+    fn wrap_ascii_exact_width() {
+        assert_eq!(wrap_str("abcde", 5), vec!["abcde"]);
+    }
+
+    #[test]
+    fn wrap_ascii_splits() {
+        assert_eq!(wrap_str("abcdefgh", 5), vec!["abcde", "fgh"]);
+    }
+
+    #[test]
+    fn wrap_cjk_respects_double_width() {
+        // Each CJK char = 2 cols. With max_width=6, only 3 chars fit per line.
+        let s = "あいうえお"; // 5 chars, 10 cols
+        let result = wrap_str(s, 6);
+        assert_eq!(result, vec!["あいう", "えお"]);
+    }
+
+    #[test]
+    fn wrap_cjk_exact_width() {
+        // 3 chars = 6 cols, max_width=6 → no wrap
+        assert_eq!(wrap_str("あいう", 6), vec!["あいう"]);
+    }
+
+    #[test]
+    fn wrap_mixed_ascii_and_cjk() {
+        // "aあb" = 1+2+1 = 4 cols → fits in width 4
+        // "cう"  = 1+2   = 3 cols
+        let s = "aあbcう";
+        let result = wrap_str(s, 4);
+        assert_eq!(result, vec!["aあb", "cう"]);
+    }
+
+    #[test]
+    fn wrap_cjk_boundary_breaks_before_overflow() {
+        // max_width=5: "あい" = 4 cols, next "う" would be 6 → wrap
+        let s = "あいう";
+        let result = wrap_str(s, 5);
+        assert_eq!(result, vec!["あい", "う"]);
+    }
+
+    #[test]
+    fn wrap_zero_width_returns_whole_string() {
+        assert_eq!(wrap_str("test", 0), vec!["test"]);
+    }
+
+    #[test]
+    fn wrap_empty_string() {
+        assert_eq!(wrap_str("", 10), vec![""]);
+    }
+
+    // ── truncate_str ──────────────────────────────────────────────────────
+
+    #[test]
+    fn truncate_ascii_short_no_truncation() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_ascii_exact_width() {
+        assert_eq!(truncate_str("abcde", 5), "abcde");
+    }
+
+    #[test]
+    fn truncate_ascii_adds_ellipsis() {
+        assert_eq!(truncate_str("abcdefgh", 5), "abcde…");
+    }
+
+    #[test]
+    fn truncate_cjk_respects_double_width() {
+        // "あいう" = 6 cols, max_width=5 → "あい" (4 cols) + "…"
+        assert_eq!(truncate_str("あいうえお", 5), "あい…");
+    }
+
+    #[test]
+    fn truncate_cjk_exact_fit() {
+        // "あいう" = 6 cols, max_width=6 → fits exactly
+        assert_eq!(truncate_str("あいう", 6), "あいう");
+    }
+
+    #[test]
+    fn truncate_mixed_ascii_and_cjk() {
+        // "aあbc" = 1+2+1+1 = 5 cols, max_width=4 → "aあb" (4 cols) + "…"
+        assert_eq!(truncate_str("aあbc", 4), "aあb…");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate_str("", 10), "");
     }
 }
