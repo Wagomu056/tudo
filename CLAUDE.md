@@ -11,6 +11,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-27
 - Rust stable ≥ 1.75 (via rustup) + ratatui 0.29 (crossterm 0.28.1), serde_json 1.0, chrono 0.4, directories 5 (006-task-reorder)
 - JSON file (`current.log` in platform data directory) (006-task-reorder)
 - JSON file — `current.log` in platform data directory (XDG/AppSupport/LOCALAPPDATA) (007-memo-panel)
+- JSON file (`current.log` in platform data directory) — unchanged (008-click-item-focus)
 
 - Rust stable (≥ 1.75 via rustup) + ratatui 0.28 (crossterm backend), serde + serde_json 1.0, chrono 0.4 (001-kanban-tui)
 
@@ -30,9 +31,9 @@ cargo test [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECH
 Rust stable (≥ 1.75 via rustup): Follow standard conventions
 
 ## Recent Changes
+- 008-click-item-focus: Added Rust stable ≥ 1.75 (via rustup) + ratatui 0.29 (crossterm 0.28.1 backend), serde + serde_json 1.0, chrono 0.4, directories 5
 - 007-memo-panel: Added Rust stable ≥ 1.75 (via rustup) + ratatui 0.29 (crossterm 0.28.1 backend), serde + serde_json 1.0, chrono 0.4, directories 5
 - 006-task-reorder: Added Rust stable ≥ 1.75 (via rustup) + ratatui 0.29 (crossterm 0.28.1), serde_json 1.0, chrono 0.4, directories 5
-- 004-url-click-open: Added Rust stable ≥ 1.75 (via rustup) + ratatui 0.29 (crossterm 0.28.1 backend), serde + serde_json 1.0, chrono 0.4, directories 5
 
 
 <!-- MANUAL ADDITIONS START -->

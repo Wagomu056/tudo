@@ -1,8 +1,8 @@
 use chrono::Local;
 
 use crate::model::{
-    AppError, AppMode, BoardState, DoneEntry, FocusArea, InputState, Memo, Status, Task,
-    UrlHitRegion,
+    AppError, AppMode, BoardState, DoneEntry, FocusArea, InputState, Memo, MemoHitRegion, Status,
+    Task, TaskHitRegion, UrlHitRegion,
 };
 
 pub const NUM_COLS: usize = 4;
@@ -21,6 +21,10 @@ pub struct AppState {
     pub status_msg: Option<String>,
     /// URL hit regions computed during each render frame; cleared at frame start.
     pub clickable_urls: Vec<UrlHitRegion>,
+    /// Task hit regions computed during each render frame; cleared at frame start.
+    pub clickable_tasks: Vec<TaskHitRegion>,
+    /// Memo hit regions computed during each render frame; cleared at frame start.
+    pub clickable_memos: Vec<MemoHitRegion>,
     /// Whether keyboard focus is in the kanban columns or the memo panel.
     pub focus_area: FocusArea,
     /// Flat index into `board.memos` for the focused memo item.
@@ -39,6 +43,8 @@ impl AppState {
             input: InputState::default(),
             status_msg: None,
             clickable_urls: Vec::new(),
+            clickable_tasks: Vec::new(),
+            clickable_memos: Vec::new(),
             focus_area: FocusArea::Kanban,
             focused_memo: 0,
             memo_cols: 4,
@@ -492,13 +498,39 @@ pub fn handle_left_click(app: &mut AppState, col: u16, row: u16) {
             return;
         }
     }
-    // Non-URL click: silently ignored.
+    // Input mode guard: don't change focus while editing
+    if app.mode != AppMode::Normal {
+        return;
+    }
+
+    // Check task hit regions
+    for region in &app.clickable_tasks {
+        if row >= region.row_start
+            && row < region.row_end
+            && col >= region.col_start
+            && col < region.col_end
+        {
+            app.focused_col = region.column;
+            app.focused_card[region.column] = region.card_index;
+            app.focus_area = FocusArea::Kanban;
+            return;
+        }
+    }
+
+    // Check memo hit regions
+    for region in &app.clickable_memos {
+        if row == region.row && col >= region.col_start && col < region.col_end {
+            app.focused_memo = region.memo_index;
+            app.focus_area = FocusArea::Memo;
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BoardState, FocusArea, Memo, Status, Task};
+    use crate::model::{BoardState, FocusArea, Memo, MemoHitRegion, Status, Task, TaskHitRegion};
 
     // ── T001: Test helper ─────────────────────────────────────────────────
 
@@ -1010,5 +1042,171 @@ mod tests {
         let doing_col = app.tasks_for_column(Status::Doing);
         assert_eq!(doing_col.len(), 1);
         assert_eq!(doing_col[0].id, 2);
+    }
+
+    // ── Click-to-focus tests ─────────────────────────────────────────────
+
+    // T005: Input mode guard — clicking task hit region in InputTitle must not change focus
+    #[test]
+    fn click_in_input_mode_does_not_change_focus() {
+        let mut app = make_app_with_tasks(&[
+            (1, "task-a", Status::Todo),
+            (2, "task-b", Status::Doing),
+        ]);
+        app.focused_col = 0;
+        app.focused_card[0] = 0;
+        app.mode = AppMode::InputTitle;
+        app.clickable_tasks.push(TaskHitRegion {
+            row_start: 3,
+            row_end: 4,
+            col_start: 10,
+            col_end: 30,
+            column: 1,
+            card_index: 0,
+        });
+
+        handle_left_click(&mut app, 15, 3);
+
+        assert_eq!(app.focused_col, 0);
+        assert_eq!(app.focused_card[0], 0);
+    }
+
+    // T007: Click task sets focused_col and focused_card
+    #[test]
+    fn click_task_sets_focus() {
+        let mut app = make_app_with_tasks(&[
+            (1, "task-a", Status::Todo),
+            (2, "task-b", Status::Todo),
+            (3, "task-c", Status::Todo),
+        ]);
+        app.focused_col = 0;
+        app.focused_card[0] = 0;
+        app.clickable_tasks.push(TaskHitRegion {
+            row_start: 3,
+            row_end: 4,
+            col_start: 0,
+            col_end: 20,
+            column: 0,
+            card_index: 2,
+        });
+
+        handle_left_click(&mut app, 10, 3);
+
+        assert_eq!(app.focused_col, 0);
+        assert_eq!(app.focused_card[0], 2);
+    }
+
+    // T008: Cross-column click switches focused_col
+    #[test]
+    fn click_task_cross_column_switches_focus() {
+        let mut app = make_app_with_tasks(&[
+            (1, "task-a", Status::Doing),
+            (2, "task-b", Status::Done),
+        ]);
+        app.focused_col = Status::Doing.col_index();
+        app.focused_card[Status::Doing.col_index()] = 0;
+        app.clickable_tasks.push(TaskHitRegion {
+            row_start: 2,
+            row_end: 3,
+            col_start: 60,
+            col_end: 80,
+            column: Status::Done.col_index(),
+            card_index: 0,
+        });
+
+        handle_left_click(&mut app, 65, 2);
+
+        assert_eq!(app.focused_col, Status::Done.col_index());
+        assert_eq!(app.focused_card[Status::Done.col_index()], 0);
+    }
+
+    // T009: Click task switches focus_area from Memo to Kanban
+    #[test]
+    fn click_task_switches_from_memo_to_kanban() {
+        let mut app = make_app_with_tasks(&[(1, "task-a", Status::Todo)]);
+        app.focus_area = FocusArea::Memo;
+        app.clickable_tasks.push(TaskHitRegion {
+            row_start: 2,
+            row_end: 3,
+            col_start: 0,
+            col_end: 20,
+            column: 0,
+            card_index: 0,
+        });
+
+        handle_left_click(&mut app, 10, 2);
+
+        assert_eq!(app.focus_area, FocusArea::Kanban);
+        assert_eq!(app.focused_col, 0);
+        assert_eq!(app.focused_card[0], 0);
+    }
+
+    // T010: Click on empty area leaves focus unchanged
+    #[test]
+    fn click_empty_area_no_change() {
+        let mut app = make_app_with_tasks(&[(1, "task-a", Status::Todo)]);
+        app.focused_col = 0;
+        app.focused_card[0] = 0;
+        app.focus_area = FocusArea::Kanban;
+        // No hit regions registered
+
+        handle_left_click(&mut app, 100, 100);
+
+        assert_eq!(app.focused_col, 0);
+        assert_eq!(app.focused_card[0], 0);
+        assert_eq!(app.focus_area, FocusArea::Kanban);
+    }
+
+    // T013: Click memo sets focus_area and focused_memo
+    #[test]
+    fn click_memo_sets_focus() {
+        let mut app = make_app_with_memos(&["A", "B", "C", "D"]);
+        app.focus_area = FocusArea::Kanban;
+        app.clickable_memos.push(MemoHitRegion {
+            row: 20,
+            col_start: 0,
+            col_end: 24,
+            memo_index: 3,
+        });
+
+        handle_left_click(&mut app, 10, 20);
+
+        assert_eq!(app.focus_area, FocusArea::Memo);
+        assert_eq!(app.focused_memo, 3);
+    }
+
+    // T014: Click memo switches focus_area from Kanban to Memo
+    #[test]
+    fn click_memo_switches_from_kanban() {
+        let mut app = make_app_with_memos(&["A", "B"]);
+        app.focus_area = FocusArea::Kanban;
+        app.clickable_memos.push(MemoHitRegion {
+            row: 20,
+            col_start: 0,
+            col_end: 24,
+            memo_index: 0,
+        });
+
+        handle_left_click(&mut app, 10, 20);
+
+        assert_eq!(app.focus_area, FocusArea::Memo);
+    }
+
+    // T015: Click different memo updates focused_memo
+    #[test]
+    fn click_memo_updates_focused_memo() {
+        let mut app = make_app_with_memos(&["A", "B", "C", "D"]);
+        app.focus_area = FocusArea::Memo;
+        app.focused_memo = 0;
+        app.clickable_memos.push(MemoHitRegion {
+            row: 20,
+            col_start: 24,
+            col_end: 48,
+            memo_index: 3,
+        });
+
+        handle_left_click(&mut app, 30, 20);
+
+        assert_eq!(app.focused_memo, 3);
     }
 }

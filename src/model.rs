@@ -225,6 +225,28 @@ pub struct UrlHitRegion {
     pub url: String,
 }
 
+// ── TaskHitRegion ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskHitRegion {
+    pub row_start: u16,
+    pub row_end: u16,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub column: usize,
+    pub card_index: usize,
+}
+
+// ── MemoHitRegion ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoHitRegion {
+    pub row: u16,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub memo_index: usize,
+}
+
 // ── AppMode ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]

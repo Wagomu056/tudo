@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::AppState;
-use crate::model::{AppMode, FocusArea, Status, ALL_STATUSES};
+use crate::model::{AppMode, FocusArea, Status, TaskHitRegion, MemoHitRegion, ALL_STATUSES};
 use crate::url;
 
 // ── Top-level render ─────────────────────────────────────────────────────────
@@ -92,27 +92,40 @@ fn render_column(
     status: Status,
     is_focused_col: bool,
 ) {
-    let tasks = app.tasks_for_column(status);
     let focused_idx = app.focused_card[status.col_index()];
 
-    // Compute URL hit regions and build wrapped ListItems.
+    // Compute URL and task hit regions.
     // Text starts at area.x + 1 (left border).
     let max_title_chars = area.width.saturating_sub(4) as usize;
     let text_x = area.x + 1;
+    let col_index = status.col_index();
     let mut cumulative_rows: u16 = 0;
     let mut url_regions = Vec::new();
-    for (vi, task) in tasks.iter().enumerate() {
-        let _ = vi;
-        let wrapped = wrap_str(&task.title, max_title_chars);
-        let item_row = area.y + 1 + cumulative_rows;
-        for (line_idx, line) in wrapped.iter().enumerate() {
-            let row = item_row + line_idx as u16;
-            let regions = url::list_item_url_regions(line, row, text_x);
-            url_regions.extend(regions);
+    let mut task_regions = Vec::new();
+    {
+        let tasks = app.tasks_for_column(status);
+        for (vi, task) in tasks.iter().enumerate() {
+            let wrapped = wrap_str(&task.title, max_title_chars);
+            let item_row = area.y + 1 + cumulative_rows;
+            let wrapped_len = wrapped.len() as u16;
+            for (line_idx, line) in wrapped.iter().enumerate() {
+                let row = item_row + line_idx as u16;
+                let regions = url::list_item_url_regions(line, row, text_x);
+                url_regions.extend(regions);
+            }
+            task_regions.push(TaskHitRegion {
+                row_start: item_row,
+                row_end: item_row + wrapped_len,
+                col_start: area.x,
+                col_end: area.x + area.width,
+                column: col_index,
+                card_index: vi,
+            });
+            cumulative_rows += wrapped_len;
         }
-        cumulative_rows += wrapped.len() as u16;
     }
     app.clickable_urls.extend(url_regions);
+    app.clickable_tasks.extend(task_regions);
 
     let tasks = app.tasks_for_column(status);
     let items: Vec<ListItem> = tasks
@@ -211,12 +224,20 @@ fn render_memo_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
             break;
         }
 
+        let cell_width = item_w.min(inner.x + inner.width - x);
         let cell_rect = Rect {
             x,
             y,
-            width: item_w.min(inner.x + inner.width - x),
+            width: cell_width,
             height: item_h,
         };
+
+        app.clickable_memos.push(MemoHitRegion {
+            row: y,
+            col_start: x,
+            col_end: x + cell_width,
+            memo_index: idx,
+        });
 
         let style = if is_focused && idx == app.focused_memo {
             Style::default()

@@ -70,6 +70,8 @@ fn run_app(
 
     loop {
         app.clickable_urls.clear();
+        app.clickable_tasks.clear();
+        app.clickable_memos.clear();
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if !event::poll(std::time::Duration::from_millis(200))? {
@@ -134,6 +136,9 @@ fn run_app(
                 ..
             }) => {
                 handle_left_click(app, column, row);
+                if let Err(e) = storage::save_board(&mut app.board) {
+                    app.status_msg = Some(e.to_string());
+                }
             }
             _ => {}
         }
