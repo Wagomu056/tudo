@@ -124,6 +124,7 @@ fn render_column(
                 card_index: vi,
             });
             cumulative_rows += wrapped_len;
+            cumulative_rows += 1;
         }
     }
     app.clickable_urls.extend(url_regions);
@@ -135,7 +136,8 @@ fn render_column(
         .enumerate()
         .map(|(i, task)| {
             let wrapped = wrap_str(&task.title, max_title_chars);
-            let lines: Vec<Line> = wrapped.into_iter().map(Line::raw).collect();
+            let mut lines: Vec<Line> = wrapped.into_iter().map(Line::raw).collect();
+            lines.push(Line::raw(""));
             let text = Text::from(lines);
             let style = if is_focused_col && i == focused_idx {
                 Style::default()
