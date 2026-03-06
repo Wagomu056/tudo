@@ -261,17 +261,73 @@ pub enum AppMode {
 #[derive(Debug, Clone, Default)]
 pub struct InputState {
     pub buffer: String,
+    /// Cursor position as a byte offset into `buffer`.
+    /// Always on a valid UTF-8 char boundary, within 0..=buffer.len().
+    pub cursor: usize,
     pub is_create: bool,
     pub is_memo: bool,
 }
 
 impl InputState {
-    /// Append a character to the buffer.
+    /// Move cursor one character to the left (no-op at beginning).
+    pub fn move_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        if let Some((idx, _)) = self.buffer[..self.cursor].char_indices().last() {
+            self.cursor = idx;
+        }
+    }
+
+    /// Move cursor one character to the right (no-op at end).
+    pub fn move_right(&mut self) {
+        if self.cursor >= self.buffer.len() {
+            return;
+        }
+        if let Some(ch) = self.buffer[self.cursor..].chars().next() {
+            self.cursor += ch.len_utf8();
+        }
+    }
+
+    /// Move cursor to the beginning of the buffer.
+    pub fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Move cursor to the end of the buffer.
+    pub fn move_end(&mut self) {
+        self.cursor = self.buffer.len();
+    }
+
+    /// Insert a character at the cursor position and advance the cursor.
+    pub fn insert_char(&mut self, c: char) {
+        self.buffer.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+    }
+
+    /// Delete the character immediately before the cursor (backspace). No-op at start.
+    pub fn delete_char_back(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        if let Some((idx, _)) = self.buffer[..self.cursor].char_indices().last() {
+            self.buffer.remove(idx);
+            self.cursor = idx;
+        }
+    }
+
+    /// Set the buffer to `s` and move the cursor to the end.
+    pub fn set_buffer(&mut self, s: String) {
+        self.cursor = s.len();
+        self.buffer = s;
+    }
+
+    /// Append a character to the buffer (does not update cursor).
     pub fn push_char(&mut self, c: char) {
         self.buffer.push(c);
     }
 
-    /// Remove the last character from the buffer (no-op if empty).
+    /// Remove the last character from the buffer (does not update cursor; no-op if empty).
     pub fn pop_char(&mut self) {
         self.buffer.pop();
     }
@@ -281,9 +337,10 @@ impl InputState {
         &self.buffer
     }
 
-    /// Reset the buffer and memo flag to defaults.
+    /// Reset the buffer, cursor, and flags to defaults.
     pub fn clear(&mut self) {
         self.buffer.clear();
+        self.cursor = 0;
         self.is_memo = false;
     }
 }
@@ -318,5 +375,248 @@ impl From<std::io::Error> for AppError {
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
         AppError::Json(e)
+    }
+}
+
+// ── InputState tests ──────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // T001: cursor invariants
+
+    #[test]
+    fn cursor_starts_at_zero_on_default() {
+        let state = InputState::default();
+        assert_eq!(state.cursor, 0);
+        assert!(state.cursor <= state.buffer.len());
+        assert!(state.buffer.is_char_boundary(state.cursor));
+    }
+
+    #[test]
+    fn cursor_stays_on_char_boundary_after_insert() {
+        let mut state = InputState::default();
+        state.insert_char('あ');
+        assert!(state.buffer.is_char_boundary(state.cursor));
+        assert!(state.cursor <= state.buffer.len());
+    }
+
+    #[test]
+    fn cursor_stays_on_char_boundary_after_delete() {
+        let mut state = InputState::default();
+        state.insert_char('あ');
+        state.delete_char_back();
+        assert!(state.buffer.is_char_boundary(state.cursor));
+        assert!(state.cursor <= state.buffer.len());
+    }
+
+    // T002/T003: move_left, move_right, move_home, move_end — ASCII
+
+    #[test]
+    fn move_left_at_start_is_noop() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_home();
+        state.move_left();
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn move_right_at_end_is_noop() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_right();
+        assert_eq!(state.cursor, 5);
+    }
+
+    #[test]
+    fn move_left_ascii() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string()); // cursor at 5
+        state.move_left();
+        assert_eq!(state.cursor, 4);
+        state.move_left();
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn move_right_ascii() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_home();
+        state.move_right();
+        assert_eq!(state.cursor, 1);
+        state.move_right();
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn move_home_goes_to_zero() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_home();
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn move_end_goes_to_buffer_len() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_home();
+        state.move_end();
+        assert_eq!(state.cursor, 5);
+    }
+
+    // T002/T003: CJK navigation
+
+    #[test]
+    fn move_left_cjk() {
+        let mut state = InputState::default();
+        state.set_buffer("あい".to_string()); // cursor at 6 (3+3 bytes)
+        state.move_left();
+        assert_eq!(state.cursor, 3);
+        state.move_left();
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn move_right_cjk() {
+        let mut state = InputState::default();
+        state.set_buffer("あい".to_string());
+        state.move_home();
+        state.move_right();
+        assert_eq!(state.cursor, 3); // after 'あ'
+        state.move_right();
+        assert_eq!(state.cursor, 6); // after 'い'
+    }
+
+    // T002/T003: mixed ASCII+CJK navigation
+
+    #[test]
+    fn move_through_mixed_text() {
+        let mut state = InputState::default();
+        // 'a'=1 byte, 'あ'=3 bytes, 'b'=1 byte → total 5 bytes
+        state.set_buffer("aあb".to_string());
+        state.move_home();
+        state.move_right();
+        assert_eq!(state.cursor, 1); // after 'a'
+        state.move_right();
+        assert_eq!(state.cursor, 4); // after 'あ'
+        state.move_right();
+        assert_eq!(state.cursor, 5); // after 'b'
+        state.move_left();
+        assert_eq!(state.cursor, 4);
+        state.move_left();
+        assert_eq!(state.cursor, 1);
+    }
+
+    // T004/T005: insert_char
+
+    #[test]
+    fn insert_char_at_end() {
+        let mut state = InputState::default();
+        state.insert_char('h');
+        state.insert_char('i');
+        assert_eq!(state.buffer, "hi");
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn insert_char_at_beginning() {
+        let mut state = InputState::default();
+        state.set_buffer("ello".to_string());
+        state.move_home();
+        state.insert_char('h');
+        assert_eq!(state.buffer, "hello");
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn insert_char_in_middle() {
+        let mut state = InputState::default();
+        state.set_buffer("hllo".to_string());
+        state.move_home();
+        state.move_right(); // after 'h'
+        state.insert_char('e');
+        assert_eq!(state.buffer, "hello");
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn insert_cjk_char_advances_cursor_by_utf8_len() {
+        let mut state = InputState::default();
+        state.insert_char('あ');
+        assert_eq!(state.buffer, "あ");
+        assert_eq!(state.cursor, 3); // 'あ' is 3 bytes in UTF-8
+    }
+
+    // T004/T005: delete_char_back
+
+    #[test]
+    fn delete_char_back_at_end() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.delete_char_back();
+        assert_eq!(state.buffer, "hell");
+        assert_eq!(state.cursor, 4);
+    }
+
+    #[test]
+    fn delete_char_back_at_beginning_is_noop() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_home();
+        state.delete_char_back();
+        assert_eq!(state.buffer, "hello");
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn delete_char_back_in_middle() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.move_home();
+        state.move_right(); // cursor at 1
+        state.move_right(); // cursor at 2
+        state.delete_char_back(); // delete 'e'
+        assert_eq!(state.buffer, "hllo");
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn delete_cjk_char_back() {
+        let mut state = InputState::default();
+        state.set_buffer("あい".to_string());
+        state.delete_char_back(); // delete 'い'
+        assert_eq!(state.buffer, "あ");
+        assert_eq!(state.cursor, 3);
+    }
+
+    // T006: set_buffer and clear
+
+    #[test]
+    fn set_buffer_moves_cursor_to_end() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        assert_eq!(state.cursor, 5);
+        assert_eq!(state.buffer, "hello");
+    }
+
+    #[test]
+    fn set_buffer_cjk_cursor_at_end() {
+        let mut state = InputState::default();
+        state.set_buffer("あい".to_string());
+        assert_eq!(state.cursor, 6); // 3+3 bytes
+    }
+
+    #[test]
+    fn clear_resets_cursor_and_buffer() {
+        let mut state = InputState::default();
+        state.set_buffer("hello".to_string());
+        state.clear();
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.buffer, "");
+        assert!(!state.is_memo);
     }
 }

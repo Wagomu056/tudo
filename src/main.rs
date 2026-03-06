@@ -206,16 +206,20 @@ fn handle_normal_key(app: &mut AppState, code: KeyCode) {
 
 fn handle_input_key(app: &mut AppState, code: KeyCode, modifiers: KeyModifiers) {
     match code {
-        // Ctrl+J (0x0A = \n) をDetailモードのみ改行として扱う
+        // Ctrl+J inserts a newline in detail mode only
         KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
             if app.mode == AppMode::InputDetail {
-                app.input.push_char('\n');
+                app.input.insert_char('\n');
             }
         }
         KeyCode::Enter => app.confirm_input(),
         KeyCode::Esc => app.cancel_input(),
-        KeyCode::Backspace => app.input.pop_char(),
-        KeyCode::Char(c) => app.input.push_char(c),
+        KeyCode::Backspace => app.input.delete_char_back(),
+        KeyCode::Char(c) => app.input.insert_char(c),
+        KeyCode::Left => app.input.move_left(),
+        KeyCode::Right => app.input.move_right(),
+        KeyCode::Home => app.input.move_home(),
+        KeyCode::End => app.input.move_end(),
         _ => {}
     }
 }

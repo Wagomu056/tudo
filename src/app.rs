@@ -226,7 +226,7 @@ impl AppState {
             None => return,
         };
         self.input.clear();
-        self.input.buffer = title;
+        self.input.set_buffer(title);
         self.input.is_create = false;
         self.mode = AppMode::InputTitle;
         self.status_msg = None;
@@ -239,7 +239,7 @@ impl AppState {
             None => return,
         };
         self.input.clear();
-        self.input.buffer = detail;
+        self.input.set_buffer(detail);
         self.input.is_create = false;
         self.mode = AppMode::InputDetail;
         self.status_msg = None;
@@ -261,7 +261,7 @@ impl AppState {
             None => return,
         };
         self.input.clear();
-        self.input.buffer = title;
+        self.input.set_buffer(title);
         self.input.is_create = false;
         self.input.is_memo = true;
         self.mode = AppMode::InputTitle;
@@ -275,7 +275,7 @@ impl AppState {
             None => return,
         };
         self.input.clear();
-        self.input.buffer = detail;
+        self.input.set_buffer(detail);
         self.input.is_create = false;
         self.input.is_memo = true;
         self.mode = AppMode::InputDetail;

@@ -1,8 +1,8 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -293,7 +293,9 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
                 } else {
                     let mut lines = vec![title_line, Line::raw("")];
                     for dl in memo.detail.split('\n') {
-                        lines.push(Line::raw(dl.to_string()));
+                        for wrapped in wrap_str(dl, available_width as usize) {
+                            lines.push(Line::raw(wrapped));
+                        }
                     }
                     lines
                 };
@@ -331,7 +333,9 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
                 } else {
                     let mut lines = vec![title_line, Line::raw("")];
                     for dl in task.detail.split('\n') {
-                        lines.push(Line::raw(dl.to_string()));
+                        for wrapped in wrap_str(dl, available_width as usize) {
+                            lines.push(Line::raw(wrapped));
+                        }
                     }
                     lines
                 };
@@ -347,8 +351,7 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
                 .title(" Detail ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)),
-        )
-        .wrap(Wrap { trim: false });
+        );
 
     frame.render_widget(panel, area);
 }
@@ -392,8 +395,36 @@ pub fn render_input_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
         (AppMode::Normal, _, _) => unreachable!(),
     };
 
-    let display = format!("{}_", app.input.value()); // trailing _ simulates cursor
-    let popup = Paragraph::new(display)
+    let available_width = popup_area.width.saturating_sub(2) as usize;
+    let available_height = popup_area.height.saturating_sub(2) as usize;
+    let content_x = popup_area.x + 1;
+    let content_y = popup_area.y + 1;
+
+    let buffer = app.input.value();
+    let cursor = app.input.cursor;
+
+    // Pre-wrap each logical line for correct CJK display
+    let wrapped_lines = wrap_lines(buffer, available_width);
+
+    // Compute visual cursor position
+    let (cursor_row, cursor_col) = cursor_visual_position(buffer, cursor, available_width);
+
+    // Scroll offset: keep cursor visible within the popup
+    let scroll_offset: usize = if available_height > 0 && cursor_row >= available_height {
+        cursor_row - available_height + 1
+    } else {
+        0
+    };
+
+    // Render only the visible slice of wrapped lines
+    let visible_lines: Vec<Line> = wrapped_lines
+        .iter()
+        .skip(scroll_offset)
+        .take(available_height)
+        .map(|l| Line::raw(l.clone()))
+        .collect();
+
+    let popup = Paragraph::new(Text::from(visible_lines))
         .block(
             Block::default()
                 .title(title)
@@ -403,6 +434,15 @@ pub fn render_input_popup(frame: &mut Frame, area: Rect, app: &mut AppState) {
         .style(Style::default().fg(Color::White));
 
     frame.render_widget(popup, popup_area);
+
+    // Set terminal cursor at the computed position
+    let screen_row = cursor_row.saturating_sub(scroll_offset);
+    if screen_row < available_height {
+        frame.set_cursor_position(Position {
+            x: content_x + cursor_col as u16,
+            y: content_y + screen_row as u16,
+        });
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -426,6 +466,40 @@ pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - pct_x) / 2),
         ])
         .split(vert[1])[1]
+}
+
+/// Wrap multi-line text: split by `\n`, then wrap each logical line at `max_width`.
+fn wrap_lines(s: &str, max_width: usize) -> Vec<String> {
+    s.split('\n')
+        .flat_map(|line| wrap_str(line, max_width))
+        .collect()
+}
+
+/// Compute the visual `(row, col)` of `cursor` (a byte offset in `buffer`) when
+/// the text is displayed with lines pre-wrapped at `wrap_width` display columns.
+/// Both row and col are 0-indexed.
+fn cursor_visual_position(buffer: &str, cursor: usize, wrap_width: usize) -> (usize, usize) {
+    let cursor = cursor.min(buffer.len());
+    // Work only with the text before the cursor position
+    let text_before = &buffer[..cursor];
+    let logical_lines: Vec<&str> = text_before.split('\n').collect();
+    let n = logical_lines.len();
+    let mut visual_row = 0usize;
+
+    for (i, &line) in logical_lines.iter().enumerate() {
+        let wrapped = wrap_str(line, wrap_width);
+        if i < n - 1 {
+            // Full logical line — count all its visual rows
+            visual_row += wrapped.len();
+        } else {
+            // Last segment — cursor is at the end of this text
+            visual_row += wrapped.len().saturating_sub(1);
+            let last_visual = wrapped.last().map(String::as_str).unwrap_or("");
+            let col: usize = last_visual.chars().map(|c| c.width().unwrap_or(0)).sum();
+            return (visual_row, col);
+        }
+    }
+    (0, 0)
 }
 
 /// Wrap a string into lines whose display width is at most `max_width` columns.
@@ -574,5 +648,117 @@ mod tests {
     #[test]
     fn truncate_empty_string() {
         assert_eq!(truncate_str("", 10), "");
+    }
+
+    // ── T014: wrap_lines (multi-line detail) ──────────────────────────────
+
+    #[test]
+    fn wrap_lines_ascii_multiline() {
+        // Two logical lines, each wrapped independently
+        let result = wrap_lines("hello\nworld", 4);
+        assert_eq!(result, vec!["hell", "o", "worl", "d"]);
+    }
+
+    #[test]
+    fn wrap_lines_cjk_multiline() {
+        // CJK lines: each fits exactly at width 4 (2 chars × 2 cols)
+        let result = wrap_lines("あい\nうえ", 4);
+        assert_eq!(result, vec!["あい", "うえ"]);
+    }
+
+    #[test]
+    fn wrap_lines_mixed_multiline() {
+        // "aあ" = 1+2=3 cols fits at width 3; "bい" = 1+2=3 fits at width 3
+        let result = wrap_lines("aあ\nbい", 3);
+        assert_eq!(result, vec!["aあ", "bい"]);
+    }
+
+    #[test]
+    fn wrap_lines_single_line_unchanged() {
+        let result = wrap_lines("hello", 10);
+        assert_eq!(result, vec!["hello"]);
+    }
+
+    // T015: full-width char at wrap boundary moves to next line
+
+    #[test]
+    fn wrap_lines_cjk_at_boundary_1col_remaining_wraps() {
+        // "ab" = 2 cols, then 'あ' = 2 cols; only 1 col remains → 'あ' wraps
+        let result = wrap_lines("abあ", 3);
+        assert_eq!(result, vec!["ab", "あ"]);
+    }
+
+    #[test]
+    fn wrap_lines_cjk_exactly_fills_width_no_extra_wrap() {
+        // "aあ" = 1+2 = 3 cols at width 3 → fits on one line
+        let result = wrap_lines("aあ", 3);
+        assert_eq!(result, vec!["aあ"]);
+    }
+
+    // ── T018: cursor_visual_position ──────────────────────────────────────
+
+    #[test]
+    fn cursor_visual_pos_empty_buffer() {
+        assert_eq!(cursor_visual_position("", 0, 10), (0, 0));
+    }
+
+    #[test]
+    fn cursor_visual_pos_ascii_no_wrap() {
+        // "hello" at width 10, cursor at byte 3 → row 0, col 3
+        assert_eq!(cursor_visual_position("hello", 3, 10), (0, 3));
+    }
+
+    #[test]
+    fn cursor_visual_pos_ascii_at_end() {
+        // cursor at end of "hello" → row 0, col 5
+        assert_eq!(cursor_visual_position("hello", 5, 10), (0, 5));
+    }
+
+    #[test]
+    fn cursor_visual_pos_wraps_to_next_row() {
+        // "hello world" at width 5:
+        //   wrap_str("hello world", 5) → ["hello", " worl", "d"]
+        // cursor = 8 → text_before = "hello wo"
+        //   wrap_str("hello wo", 5) → ["hello", " wo"]  → row 1, col 3
+        assert_eq!(cursor_visual_position("hello world", 8, 5), (1, 3));
+    }
+
+    #[test]
+    fn cursor_visual_pos_with_newline() {
+        // "hi\nworld", cursor at byte 5 (= "hi\nwo" → after 'o' in "wo")
+        // text_before = "hi\nwo" → split → ["hi", "wo"]
+        // "hi" → 1 visual row → visual_row = 1
+        // "wo" last → col = 2
+        assert_eq!(cursor_visual_position("hi\nworld", 5, 10), (1, 2));
+    }
+
+    #[test]
+    fn cursor_visual_pos_cjk() {
+        // "あいう" at width 4: wrap → ["あい", "う"]
+        // cursor at byte 9 (after all 3 chars) → text_before = "あいう"
+        // wrap_str("あいう", 4) → ["あい", "う"] → row 1, col 2
+        assert_eq!(cursor_visual_position("あいう", 9, 4), (1, 2));
+    }
+
+    #[test]
+    fn cursor_visual_pos_cjk_mid() {
+        // "あいう" cursor at byte 3 (after 'あ') → text_before = "あ"
+        // wrap_str("あ", 4) → ["あ"] → row 0, col 2
+        assert_eq!(cursor_visual_position("あいう", 3, 4), (0, 2));
+    }
+
+    #[test]
+    fn cursor_visual_pos_at_newline_char() {
+        // "hello\nworld", cursor at byte 5 (before '\n') → text_before = "hello"
+        // split('\n') → ["hello"] → wrap_str("hello", 10) → ["hello"]
+        // row 0, col 5
+        assert_eq!(cursor_visual_position("hello\nworld", 5, 10), (0, 5));
+    }
+
+    #[test]
+    fn cursor_visual_pos_start_of_second_line() {
+        // "hello\nworld", cursor at byte 6 (after '\n') → text_before = "hello\n"
+        // split('\n') → ["hello", ""] → "hello" → 1 row, "" last → row 1, col 0
+        assert_eq!(cursor_visual_position("hello\nworld", 6, 10), (1, 0));
     }
 }
