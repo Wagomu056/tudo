@@ -135,7 +135,7 @@ fn boardstate_next_id_greater_than_all_task_ids() {
         ],
         3,
     );
-    assert!(board.next_id > board.tasks.iter().map(|t| t.id).max().unwrap_or(0));
+    assert!(board.next_id > board.tasks.all_tasks().map(|t| t.id).max().unwrap_or(0));
 }
 
 #[test]
@@ -163,10 +163,12 @@ fn task_title_valid_when_non_empty() {
 #[test]
 fn tasks_for_column_returns_only_matching_status() {
     let mut app = AppState::new(BoardState::default());
-    app.board.tasks.push(Task::new(1, "Todo task".to_string()));
+    app.board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "Todo task".to_string()));
     let mut doing = Task::new(2, "Doing task".to_string());
     doing.status = Status::Doing;
-    app.board.tasks.push(doing);
+    app.board.tasks.insert_at_top(Status::Doing, doing);
 
     let todo_tasks = app.tasks_for_column(Status::Todo);
     assert_eq!(todo_tasks.len(), 1);
@@ -180,8 +182,13 @@ fn tasks_for_column_returns_only_matching_status() {
 #[test]
 fn focused_task_returns_correct_task() {
     let mut app = AppState::new(BoardState::default());
-    app.board.tasks.push(Task::new(1, "First".to_string()));
-    app.board.tasks.push(Task::new(2, "Second".to_string()));
+    // Insert in reverse order so "First" ends up at index 0 (insert_at_top reverses order)
+    app.board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(2, "Second".to_string()));
+    app.board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "First".to_string()));
     app.focused_col = 0;
     app.focused_card[0] = 0;
 
@@ -235,12 +242,17 @@ fn input_state_clear_resets_buffer() {
 #[test]
 fn advance_status_todo_to_doing() {
     let mut app = AppState::new(BoardState::default());
-    app.board.tasks.push(Task::new(1, "Task".to_string()));
+    app.board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "Task".to_string()));
     app.focused_col = 0;
     app.focused_card[0] = 0;
 
     app.advance_status();
-    assert_eq!(app.board.tasks[0].status, Status::Doing);
+    assert_eq!(
+        app.board.tasks.tasks_for(Status::Doing)[0].status,
+        Status::Doing
+    );
 }
 
 #[test]
@@ -248,11 +260,14 @@ fn advance_status_done_is_noop() {
     let mut app = AppState::new(BoardState::default());
     let mut task = Task::new(1, "Task".to_string());
     task.status = Status::Done;
-    app.board.tasks.push(task);
+    app.board.tasks.insert_at_top(Status::Done, task);
     app.focused_col = 3; // Done column
 
     app.advance_status();
-    assert_eq!(app.board.tasks[0].status, Status::Done);
+    assert_eq!(
+        app.board.tasks.tasks_for(Status::Done)[0].status,
+        Status::Done
+    );
 }
 
 #[test]
@@ -260,27 +275,37 @@ fn retreat_status_doing_to_todo() {
     let mut app = AppState::new(BoardState::default());
     let mut task = Task::new(1, "Task".to_string());
     task.status = Status::Doing;
-    app.board.tasks.push(task);
+    app.board.tasks.insert_at_top(Status::Doing, task);
     app.focused_col = 1; // Doing column
 
     app.retreat_status();
-    assert_eq!(app.board.tasks[0].status, Status::Todo);
+    assert_eq!(
+        app.board.tasks.tasks_for(Status::Todo)[0].status,
+        Status::Todo
+    );
 }
 
 #[test]
 fn retreat_status_todo_is_noop() {
     let mut app = AppState::new(BoardState::default());
-    app.board.tasks.push(Task::new(1, "Task".to_string()));
+    app.board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "Task".to_string()));
     app.focused_col = 0; // Todo column
 
     app.retreat_status();
-    assert_eq!(app.board.tasks[0].status, Status::Todo);
+    assert_eq!(
+        app.board.tasks.tasks_for(Status::Todo)[0].status,
+        Status::Todo
+    );
 }
 
 #[test]
 fn delete_focused_card_removes_task() {
     let mut app = AppState::new(BoardState::default());
-    app.board.tasks.push(Task::new(1, "To delete".to_string()));
+    app.board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "To delete".to_string()));
     app.focused_col = 0;
     app.focused_card[0] = 0;
 

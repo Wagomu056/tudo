@@ -9,7 +9,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::AppState;
-use crate::model::{AppMode, FocusArea, Status, TaskHitRegion, MemoHitRegion, ALL_STATUSES};
+use crate::model::{AppMode, FocusArea, MemoHitRegion, Status, TaskHitRegion, ALL_STATUSES};
 use crate::url;
 
 // ── Top-level render ─────────────────────────────────────────────────────────
@@ -347,13 +347,12 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut AppState) {
         }
     };
 
-    let panel = Paragraph::new(content)
-        .block(
-            Block::default()
-                .title(" Detail ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let panel = Paragraph::new(content).block(
+        Block::default()
+            .title(" Detail ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
 
     frame.render_widget(panel, area);
 }

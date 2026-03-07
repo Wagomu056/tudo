@@ -54,19 +54,15 @@ impl AppState {
     // ── Query helpers ──────────────────────────────────────────────────────
 
     /// Return references to tasks belonging to the given column status.
-    pub fn tasks_for_column(&self, status: Status) -> Vec<&Task> {
-        self.board
-            .tasks
-            .iter()
-            .filter(|t| t.status == status)
-            .collect()
+    pub fn tasks_for_column(&self, status: Status) -> &Vec<Task> {
+        self.board.tasks.tasks_for(status)
     }
 
     /// Return a reference to the currently focused task, if any.
     pub fn focused_task(&self) -> Option<&Task> {
         let status = crate::model::ALL_STATUSES[self.focused_col];
         let col = self.tasks_for_column(status);
-        col.get(self.focused_card[self.focused_col]).copied()
+        col.get(self.focused_card[self.focused_col])
     }
 
     /// ID of the focused task, if any.
@@ -129,15 +125,22 @@ impl AppState {
             Some(id) => id,
             None => return,
         };
-        if let Some(task) = self.board.tasks.iter_mut().find(|t| t.id == id) {
-            if let Some(next) = task.status.next() {
+        let old_status = match self.board.tasks.all_tasks().find(|t| t.id == id) {
+            Some(t) => t.status,
+            None => return,
+        };
+        if let Some(next) = old_status.next() {
+            if let Some(mut task) = self.board.tasks.remove_by_id(old_status, id) {
                 task.status = next;
                 if next == Status::Done {
                     task.done_at = Some(Local::now());
                 }
+                self.board.tasks.insert_at_top(next, task);
+                let col = next.col_index();
+                self.focused_col = col;
+                self.focused_card[col] = 0;
             }
         }
-        self.focus_task_by_id(id);
         self.clamp_focus();
     }
 
@@ -147,15 +150,22 @@ impl AppState {
             Some(id) => id,
             None => return,
         };
-        if let Some(task) = self.board.tasks.iter_mut().find(|t| t.id == id) {
-            if let Some(prev) = task.status.prev() {
+        let old_status = match self.board.tasks.all_tasks().find(|t| t.id == id) {
+            Some(t) => t.status,
+            None => return,
+        };
+        if let Some(prev) = old_status.prev() {
+            if let Some(mut task) = self.board.tasks.remove_by_id(old_status, id) {
                 task.status = prev;
                 if prev != Status::Done {
                     task.done_at = None;
                 }
+                self.board.tasks.insert_at_top(prev, task);
+                let col = prev.col_index();
+                self.focused_col = col;
+                self.focused_card[col] = 0;
             }
         }
-        self.focus_task_by_id(id);
         self.clamp_focus();
     }
 
@@ -165,24 +175,9 @@ impl AppState {
             Some(id) => id,
             None => return,
         };
-        self.board.tasks.retain(|t| t.id != id);
+        let status = crate::model::ALL_STATUSES[self.focused_col];
+        self.board.tasks.remove_by_id(status, id);
         self.clamp_focus();
-    }
-
-    /// Move `focused_col` and `focused_card` to follow the task with the given
-    /// id to its current (possibly new) column and position within that column.
-    fn focus_task_by_id(&mut self, id: u64) {
-        let status = match self.board.tasks.iter().find(|t| t.id == id) {
-            Some(task) => task.status,
-            None => return,
-        };
-        let col = status.col_index();
-        let pos = {
-            let col_tasks = self.tasks_for_column(status);
-            col_tasks.iter().position(|t| t.id == id).unwrap_or(0)
-        };
-        self.focused_col = col;
-        self.focused_card[col] = pos;
     }
 
     /// Clamp all per-column cursors so they remain within valid bounds.
@@ -203,9 +198,10 @@ impl AppState {
     /// Discard Done tasks whose `done_at` date is not today.
     pub fn apply_daily_filter(&mut self) {
         let today = Local::now().date_naive();
-        self.board.tasks.retain(|t| {
-            t.status != Status::Done || t.done_at.map(|d| d.date_naive() == today).unwrap_or(false)
-        });
+        self.board
+            .tasks
+            .done
+            .retain(|t| t.done_at.map(|d| d.date_naive() == today).unwrap_or(false));
         self.clamp_focus();
     }
 
@@ -312,14 +308,9 @@ impl AppState {
         } else if self.input.is_create {
             let id = self.board.alloc_id();
             let task = Task::new(id, value);
-            let insert_pos = self
-                .board
-                .tasks
-                .iter()
-                .position(|t| t.status == Status::Todo)
-                .unwrap_or(0);
-            self.board.tasks.insert(insert_pos, task);
-            self.focus_task_by_id(id);
+            self.board.tasks.insert_at_top(Status::Todo, task);
+            self.focused_col = Status::Todo.col_index();
+            self.focused_card[Status::Todo.col_index()] = 0;
         } else {
             let id = match self.focused_task_id() {
                 Some(id) => id,
@@ -328,8 +319,15 @@ impl AppState {
                     return;
                 }
             };
+            let status = crate::model::ALL_STATUSES[self.focused_col];
             let is_detail = self.mode == AppMode::InputDetail;
-            if let Some(task) = self.board.tasks.iter_mut().find(|t| t.id == id) {
+            if let Some(task) = self
+                .board
+                .tasks
+                .tasks_for_mut(status)
+                .iter_mut()
+                .find(|t| t.id == id)
+            {
                 if is_detail {
                     task.detail = value;
                 } else {
@@ -417,23 +415,11 @@ impl AppState {
         let col = self.focused_col;
         let status = crate::model::ALL_STATUSES[col];
         let cursor = self.focused_card[col];
-
-        let col_indices: Vec<usize> = self
-            .board
-            .tasks
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.status == status)
-            .map(|(i, _)| i)
-            .collect();
-
-        if cursor + 1 >= col_indices.len() {
+        let list = self.board.tasks.tasks_for_mut(status);
+        if cursor + 1 >= list.len() {
             return false;
         }
-
-        self.board
-            .tasks
-            .swap(col_indices[cursor], col_indices[cursor + 1]);
+        list.swap(cursor, cursor + 1);
         self.focused_card[col] = cursor + 1;
         true
     }
@@ -444,23 +430,11 @@ impl AppState {
         let col = self.focused_col;
         let status = crate::model::ALL_STATUSES[col];
         let cursor = self.focused_card[col];
-
         if cursor == 0 {
             return false;
         }
-
-        let col_indices: Vec<usize> = self
-            .board
-            .tasks
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.status == status)
-            .map(|(i, _)| i)
-            .collect();
-
-        self.board
-            .tasks
-            .swap(col_indices[cursor - 1], col_indices[cursor]);
+        let list = self.board.tasks.tasks_for_mut(status);
+        list.swap(cursor - 1, cursor);
         self.focused_card[col] = cursor - 1;
         true
     }
@@ -472,8 +446,9 @@ impl AppState {
     pub fn make_done_entry_for(&self, id: u64) -> Option<DoneEntry> {
         self.board
             .tasks
+            .tasks_for(Status::Done)
             .iter()
-            .find(|t| t.id == id && t.status == Status::Done)
+            .find(|t| t.id == id)
             .map(DoneEntry::from_task)
     }
 
@@ -658,8 +633,9 @@ mod tests {
 
     #[test]
     fn test_source_column_clamped_when_last_task_moves_out() {
-        // T2 is inserted first → index 0 in Checking.
-        // T1 is in Doing → after advancing, T1 lands at index 1 in Checking.
+        // T2 is already in Checking at index 0.
+        // T1 is in Doing → after advancing with insert_at_top, T1 lands at index 0 of Checking,
+        // pushing T2 to index 1.
         let mut app =
             make_app_with_tasks(&[(2, "other", Status::Checking), (1, "task", Status::Doing)]);
         app.focused_col = Status::Doing.col_index();
@@ -668,9 +644,9 @@ mod tests {
         // Advance T1: Doing → Checking
         app.advance_status();
 
-        // Focus follows T1 into Checking at its insertion position (index 1)
+        // Focus follows T1 to index 0 of Checking (insert_at_top places it there)
         assert_eq!(app.focused_col, Status::Checking.col_index());
-        assert_eq!(app.focused_card[Status::Checking.col_index()], 1);
+        assert_eq!(app.focused_card[Status::Checking.col_index()], 0);
         // Source column (Doing) is now empty; cursor clamped to 0
         assert_eq!(app.focused_card[Status::Doing.col_index()], 0);
     }
@@ -739,7 +715,7 @@ mod tests {
 
         app.reorder_task_down();
 
-        for task in &app.board.tasks {
+        for task in app.board.tasks.all_tasks() {
             assert_eq!(task.status, Status::Doing);
         }
     }
@@ -1049,10 +1025,8 @@ mod tests {
     // T005: Input mode guard — clicking task hit region in InputTitle must not change focus
     #[test]
     fn click_in_input_mode_does_not_change_focus() {
-        let mut app = make_app_with_tasks(&[
-            (1, "task-a", Status::Todo),
-            (2, "task-b", Status::Doing),
-        ]);
+        let mut app =
+            make_app_with_tasks(&[(1, "task-a", Status::Todo), (2, "task-b", Status::Doing)]);
         app.focused_col = 0;
         app.focused_card[0] = 0;
         app.mode = AppMode::InputTitle;
@@ -1099,10 +1073,8 @@ mod tests {
     // T008: Cross-column click switches focused_col
     #[test]
     fn click_task_cross_column_switches_focus() {
-        let mut app = make_app_with_tasks(&[
-            (1, "task-a", Status::Doing),
-            (2, "task-b", Status::Done),
-        ]);
+        let mut app =
+            make_app_with_tasks(&[(1, "task-a", Status::Doing), (2, "task-b", Status::Done)]);
         app.focused_col = Status::Doing.col_index();
         app.focused_card[Status::Doing.col_index()] = 0;
         app.clickable_tasks.push(TaskHitRegion {
@@ -1173,6 +1145,104 @@ mod tests {
 
         assert_eq!(app.focus_area, FocusArea::Memo);
         assert_eq!(app.focused_memo, 3);
+    }
+
+    // ── T009 [US1]: Advance places task at top of destination column ──────
+
+    #[test]
+    fn test_advance_places_task_at_top_of_destination() {
+        // A is already in Doing at index 0; advance B from Todo to Doing
+        let mut app =
+            make_app_with_tasks(&[(1, "task-A", Status::Doing), (2, "task-B", Status::Todo)]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0; // focused on B
+
+        app.advance_status();
+
+        // B is now at index 0 of Doing (most recently moved is at top)
+        let doing = app.tasks_for_column(Status::Doing);
+        assert_eq!(doing[0].id, 2, "B should be at index 0 of Doing");
+        assert_eq!(doing[1].id, 1, "A should be at index 1 of Doing");
+    }
+
+    // ── T010 [US2]: Create task places it at top of Todo ─────────────────
+
+    #[test]
+    fn test_create_task_places_at_top_of_todo() {
+        let mut app = make_app_with_tasks(&[(1, "existing", Status::Todo)]);
+        app.open_create();
+        app.input.buffer = "brand-new".to_string();
+        app.confirm_input();
+
+        let todo = app.tasks_for_column(Status::Todo);
+        assert_eq!(todo[0].title, "brand-new", "new task at index 0");
+        assert_eq!(todo[1].title, "existing", "existing task pushed to index 1");
+        assert_eq!(app.focused_col, Status::Todo.col_index());
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 0);
+    }
+
+    // ── T013 [US3]: Retreat places task at top of previous column ─────────
+
+    #[test]
+    fn test_retreat_places_task_at_top_of_destination() {
+        // B and C are in Todo; A is in Doing → retreat A back to Todo
+        let mut app = make_app_with_tasks(&[
+            (2, "task-B", Status::Todo),
+            (3, "task-C", Status::Todo),
+            (1, "task-A", Status::Doing),
+        ]);
+        app.focused_col = Status::Doing.col_index();
+        app.focused_card[Status::Doing.col_index()] = 0; // focused on A
+
+        app.retreat_status();
+
+        // A is now at index 0 of Todo
+        let todo = app.tasks_for_column(Status::Todo);
+        assert_eq!(
+            todo[0].id, 1,
+            "A should be at index 0 of Todo after retreat"
+        );
+    }
+
+    // ── T015 [US4]: reorder_task_down and reorder_task_up within StatusTaskMap
+
+    #[test]
+    fn test_reorder_within_status_task_map_down() {
+        // 3 tasks in Todo: C(id=3) at top, B(id=2) middle, A(id=1) bottom
+        let mut app = make_app_with_tasks(&[
+            (3, "task-C", Status::Todo),
+            (2, "task-B", Status::Todo),
+            (1, "task-A", Status::Todo),
+        ]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 0; // focused on C
+
+        let moved = app.reorder_task_down();
+
+        assert!(moved);
+        let todo = app.tasks_for_column(Status::Todo);
+        assert_eq!(todo[0].id, 2, "B should now be at index 0");
+        assert_eq!(todo[1].id, 3, "C moved to index 1");
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 1);
+    }
+
+    #[test]
+    fn test_reorder_within_status_task_map_up() {
+        let mut app = make_app_with_tasks(&[
+            (3, "task-C", Status::Todo),
+            (2, "task-B", Status::Todo),
+            (1, "task-A", Status::Todo),
+        ]);
+        app.focused_col = Status::Todo.col_index();
+        app.focused_card[Status::Todo.col_index()] = 2; // focused on A
+
+        let moved = app.reorder_task_up();
+
+        assert!(moved);
+        let todo = app.tasks_for_column(Status::Todo);
+        assert_eq!(todo[1].id, 1, "A moved to index 1");
+        assert_eq!(todo[2].id, 2, "B pushed to index 2");
+        assert_eq!(app.focused_card[Status::Todo.col_index()], 1);
     }
 
     // T014: Click memo switches focus_area from Kanban to Memo

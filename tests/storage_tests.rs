@@ -104,7 +104,9 @@ fn append_done_entry_writes_to_data_dir_not_cwd() {
 #[test]
 fn save_and_load_round_trip_via_data_dir() {
     let mut board = BoardState::default();
-    board.tasks.push(Task::new(1, "RoundTrip Task".to_string()));
+    board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "RoundTrip Task".to_string()));
     board.next_id = 2;
 
     storage::save_board(&mut board).expect("save_board failed");
@@ -112,7 +114,10 @@ fn save_and_load_round_trip_via_data_dir() {
 
     assert_eq!(loaded.next_id, 2);
     assert_eq!(loaded.tasks.len(), 1);
-    assert_eq!(loaded.tasks[0].title, "RoundTrip Task");
+    assert_eq!(
+        loaded.tasks.tasks_for(Status::Todo)[0].title,
+        "RoundTrip Task"
+    );
 }
 
 #[test]
@@ -133,11 +138,13 @@ fn save_and_load_board_round_trip() {
     let path_str = path.to_str().unwrap();
 
     let mut board = BoardState::default();
-    board.tasks.push(Task::new(1, "Alpha".to_string()));
+    board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "Alpha".to_string()));
     let mut task2 = Task::new(2, "Beta".to_string());
     task2.status = Status::Doing;
     task2.detail = "Some detail".to_string();
-    board.tasks.push(task2);
+    board.tasks.insert_at_top(Status::Doing, task2);
     board.next_id = 3;
 
     storage::save_board_to(&mut board, path_str).expect("save board");
@@ -145,10 +152,16 @@ fn save_and_load_board_round_trip() {
     let loaded = storage::load_board_from(path_str).expect("load board");
     assert_eq!(loaded.version, 1);
     assert_eq!(loaded.tasks.len(), 2);
-    assert_eq!(loaded.tasks[0].title, "Alpha");
-    assert_eq!(loaded.tasks[1].title, "Beta");
-    assert_eq!(loaded.tasks[1].status, Status::Doing);
-    assert_eq!(loaded.tasks[1].detail, "Some detail");
+    assert_eq!(loaded.tasks.tasks_for(Status::Todo)[0].title, "Alpha");
+    assert_eq!(loaded.tasks.tasks_for(Status::Doing)[0].title, "Beta");
+    assert_eq!(
+        loaded.tasks.tasks_for(Status::Doing)[0].status,
+        Status::Doing
+    );
+    assert_eq!(
+        loaded.tasks.tasks_for(Status::Doing)[0].detail,
+        "Some detail"
+    );
     assert_eq!(loaded.next_id, 3);
 }
 
@@ -222,6 +235,97 @@ fn save_and_load_board_with_memos() {
     assert_eq!(loaded.next_memo_id, 2);
 }
 
+// ── T006: BoardState serde migration round-trip ───────────────────────────────
+
+#[test]
+fn board_state_tasks_round_trip_across_multiple_statuses() {
+    let path = temp_path("multi_status.log");
+    let path_str = path.to_str().unwrap();
+
+    let mut board = BoardState::default();
+    let mut t1 = Task::new(1, "todo-task".to_string());
+    t1.status = Status::Todo;
+    let mut t2 = Task::new(2, "doing-task".to_string());
+    t2.status = Status::Doing;
+    let mut t3 = Task::new(3, "done-task".to_string());
+    t3.status = Status::Done;
+    board.tasks.insert_at_top(Status::Todo, t1);
+    board.tasks.insert_at_top(Status::Doing, t2);
+    board.tasks.insert_at_top(Status::Done, t3);
+    board.next_id = 4;
+
+    storage::save_board_to(&mut board, path_str).expect("save board");
+    let loaded = storage::load_board_from(path_str).expect("load board");
+
+    // flat JSON "tasks" array preserved; all tasks round-trip correctly
+    assert_eq!(loaded.tasks.len(), 3);
+    let ids: Vec<u64> = loaded.tasks.all_tasks().map(|t| t.id).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&2));
+    assert!(ids.contains(&3));
+    let statuses: Vec<Status> = loaded.tasks.all_tasks().map(|t| t.status).collect();
+    assert!(statuses.contains(&Status::Todo));
+    assert!(statuses.contains(&Status::Doing));
+    assert!(statuses.contains(&Status::Done));
+}
+
+// ── T017 [US5]: Per-status order survives save/reload ────────────────────────
+
+#[test]
+fn todo_order_preserved_through_serialization_round_trip() {
+    let path = temp_path("order_round_trip.log");
+    let path_str = path.to_str().unwrap();
+
+    let mut board = BoardState::default();
+    // Insert A first, then B — so B is at index 0, A at index 1
+    board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(1, "task-A".to_string()));
+    board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(2, "task-B".to_string()));
+    board.next_id = 3;
+
+    storage::save_board_to(&mut board, path_str).expect("save board");
+    let loaded = storage::load_board_from(path_str).expect("load board");
+
+    let todo = loaded.tasks.tasks_for(Status::Todo);
+    assert_eq!(todo.len(), 2);
+    assert_eq!(todo[0].id, 2, "B should be at index 0 (preserved order)");
+    assert_eq!(todo[1].id, 1, "A should be at index 1 (preserved order)");
+}
+
+// ── T018 [US5]: Legacy flat JSON loads correctly ──────────────────────────────
+
+#[test]
+fn legacy_flat_json_loads_and_distributes_by_status() {
+    let path = temp_path("legacy.log");
+    let path_str = path.to_str().unwrap();
+
+    let legacy_json = r#"{
+        "version": 1,
+        "next_id": 4,
+        "tasks": [
+            {"id": 1, "title": "todo-task", "detail": "", "status": "Todo", "created_at": "2026-03-01T10:00:00+09:00", "done_at": null},
+            {"id": 2, "title": "doing-task", "detail": "", "status": "Doing", "created_at": "2026-03-01T10:00:00+09:00", "done_at": null},
+            {"id": 3, "title": "done-task", "detail": "", "status": "Done", "created_at": "2026-03-01T10:00:00+09:00", "done_at": "2026-03-01T11:00:00+09:00"}
+        ],
+        "saved_at": "2026-03-01T10:00:00+09:00",
+        "memos": [],
+        "next_memo_id": 1
+    }"#;
+
+    std::fs::write(path_str, legacy_json).expect("write legacy json");
+    let loaded = storage::load_board_from(path_str).expect("load legacy board");
+
+    assert_eq!(loaded.tasks.tasks_for(Status::Todo).len(), 1);
+    assert_eq!(loaded.tasks.tasks_for(Status::Doing).len(), 1);
+    assert_eq!(loaded.tasks.tasks_for(Status::Done).len(), 1);
+    assert_eq!(loaded.tasks.tasks_for(Status::Todo)[0].title, "todo-task");
+    assert_eq!(loaded.tasks.tasks_for(Status::Doing)[0].title, "doing-task");
+    assert_eq!(loaded.tasks.tasks_for(Status::Done)[0].title, "done-task");
+}
+
 // ── Daily Done filter (T035) ──────────────────────────────────────────────────
 
 #[test]
@@ -235,16 +339,18 @@ fn daily_filter_removes_done_tasks_from_previous_days() {
     let mut old_task = Task::new(1, "Old done".to_string());
     old_task.status = Status::Done;
     old_task.done_at = Some(Local::now() - Duration::days(1));
-    board.tasks.push(old_task);
+    board.tasks.insert_at_top(Status::Done, old_task);
 
     // A Done task from today
     let mut today_task = Task::new(2, "Today done".to_string());
     today_task.status = Status::Done;
     today_task.done_at = Some(Local::now());
-    board.tasks.push(today_task);
+    board.tasks.insert_at_top(Status::Done, today_task);
 
     // A Todo task (should always survive)
-    board.tasks.push(Task::new(3, "Active".to_string()));
+    board
+        .tasks
+        .insert_at_top(Status::Todo, Task::new(3, "Active".to_string()));
     board.next_id = 4;
 
     let mut app = AppState::new(board);

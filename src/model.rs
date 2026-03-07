@@ -136,6 +136,91 @@ pub enum FocusArea {
     Memo,
 }
 
+// ── StatusTaskMap ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default)]
+pub struct StatusTaskMap {
+    pub todo: Vec<Task>,
+    pub doing: Vec<Task>,
+    pub checking: Vec<Task>,
+    pub done: Vec<Task>,
+}
+
+impl StatusTaskMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn tasks_for(&self, status: Status) -> &Vec<Task> {
+        match status {
+            Status::Todo => &self.todo,
+            Status::Doing => &self.doing,
+            Status::Checking => &self.checking,
+            Status::Done => &self.done,
+        }
+    }
+
+    pub fn tasks_for_mut(&mut self, status: Status) -> &mut Vec<Task> {
+        match status {
+            Status::Todo => &mut self.todo,
+            Status::Doing => &mut self.doing,
+            Status::Checking => &mut self.checking,
+            Status::Done => &mut self.done,
+        }
+    }
+
+    pub fn insert_at_top(&mut self, status: Status, task: Task) {
+        self.tasks_for_mut(status).insert(0, task);
+    }
+
+    pub fn remove_by_id(&mut self, status: Status, id: u64) -> Option<Task> {
+        let list = self.tasks_for_mut(status);
+        list.iter()
+            .position(|t| t.id == id)
+            .map(|pos| list.remove(pos))
+    }
+
+    pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
+        self.todo
+            .iter()
+            .chain(self.doing.iter())
+            .chain(self.checking.iter())
+            .chain(self.done.iter())
+    }
+
+    pub fn from_flat(tasks: Vec<Task>) -> Self {
+        let mut map = StatusTaskMap::new();
+        for task in tasks {
+            map.tasks_for_mut(task.status).push(task);
+        }
+        map
+    }
+
+    pub fn len(&self) -> usize {
+        self.todo.len() + self.doing.len() + self.checking.len() + self.done.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+fn serialize_status_task_map<S>(map: &StatusTaskMap, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let flat: Vec<&Task> = map.all_tasks().collect();
+    flat.serialize(serializer)
+}
+
+fn deserialize_status_task_map<'de, D>(deserializer: D) -> Result<StatusTaskMap, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let flat = Vec::<Task>::deserialize(deserializer)?;
+    Ok(StatusTaskMap::from_flat(flat))
+}
+
 // ── BoardState ───────────────────────────────────────────────────────────────
 
 fn default_next_memo_id() -> u64 {
@@ -146,7 +231,11 @@ fn default_next_memo_id() -> u64 {
 pub struct BoardState {
     pub version: u32,
     pub next_id: u64,
-    pub tasks: Vec<Task>,
+    #[serde(
+        serialize_with = "serialize_status_task_map",
+        deserialize_with = "deserialize_status_task_map"
+    )]
+    pub tasks: StatusTaskMap,
     pub saved_at: DateTime<Local>,
     #[serde(default)]
     pub memos: Vec<Memo>,
@@ -159,7 +248,7 @@ impl Default for BoardState {
         BoardState {
             version: 1,
             next_id: 1,
-            tasks: Vec::new(),
+            tasks: StatusTaskMap::new(),
             saved_at: Local::now(),
             memos: Vec::new(),
             next_memo_id: 1,
@@ -168,13 +257,13 @@ impl Default for BoardState {
 }
 
 impl BoardState {
-    /// Construct a board with the given tasks and next_id.
+    /// Construct a board with the given tasks (flat Vec) and next_id.
     /// Used in tests for building specific states.
     pub fn with_tasks(tasks: Vec<Task>, next_id: u64) -> Self {
         BoardState {
             version: 1,
             next_id,
-            tasks,
+            tasks: StatusTaskMap::from_flat(tasks),
             saved_at: Local::now(),
             memos: Vec::new(),
             next_memo_id: 1,
@@ -383,6 +472,72 @@ impl From<serde_json::Error> for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── T002: StatusTaskMap construction and insert ───────────────────────
+
+    #[test]
+    fn status_task_map_new_returns_empty_lists() {
+        let map = StatusTaskMap::new();
+        assert!(map.tasks_for(Status::Todo).is_empty());
+        assert!(map.tasks_for(Status::Doing).is_empty());
+        assert!(map.tasks_for(Status::Checking).is_empty());
+        assert!(map.tasks_for(Status::Done).is_empty());
+    }
+
+    #[test]
+    fn status_task_map_insert_at_top_places_at_index_zero() {
+        let mut map = StatusTaskMap::new();
+        let t1 = Task::new(1, "first".to_string());
+        let t2 = Task::new(2, "second".to_string());
+        map.insert_at_top(Status::Todo, t1);
+        map.insert_at_top(Status::Todo, t2);
+        let tasks = map.tasks_for(Status::Todo);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].id, 2); // most recent at top
+        assert_eq!(tasks[1].id, 1); // original pushed down
+    }
+
+    // ── T003: StatusTaskMap remove_by_id ─────────────────────────────────
+
+    #[test]
+    fn status_task_map_remove_by_id_removes_correct_task() {
+        let mut map = StatusTaskMap::new();
+        map.insert_at_top(Status::Todo, Task::new(1, "a".to_string()));
+        map.insert_at_top(Status::Todo, Task::new(2, "b".to_string()));
+        let removed = map.remove_by_id(Status::Todo, 1);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, 1);
+        assert_eq!(map.tasks_for(Status::Todo).len(), 1);
+        assert_eq!(map.tasks_for(Status::Todo)[0].id, 2);
+    }
+
+    #[test]
+    fn status_task_map_remove_by_id_noop_when_not_found() {
+        let mut map = StatusTaskMap::new();
+        map.insert_at_top(Status::Todo, Task::new(1, "a".to_string()));
+        let removed = map.remove_by_id(Status::Todo, 99);
+        assert!(removed.is_none());
+        assert_eq!(map.tasks_for(Status::Todo).len(), 1);
+    }
+
+    // ── T004: StatusTaskMap from_flat ─────────────────────────────────────
+
+    #[test]
+    fn status_task_map_from_flat_distributes_by_status() {
+        let mut t1 = Task::new(1, "todo1".to_string());
+        t1.status = Status::Todo;
+        let mut t2 = Task::new(2, "doing1".to_string());
+        t2.status = Status::Doing;
+        let mut t3 = Task::new(3, "todo2".to_string());
+        t3.status = Status::Todo;
+        let map = StatusTaskMap::from_flat(vec![t1, t2, t3]);
+        assert_eq!(map.tasks_for(Status::Todo).len(), 2);
+        assert_eq!(map.tasks_for(Status::Doing).len(), 1);
+        assert_eq!(map.tasks_for(Status::Checking).len(), 0);
+        // preserves relative order within each status
+        assert_eq!(map.tasks_for(Status::Todo)[0].id, 1);
+        assert_eq!(map.tasks_for(Status::Todo)[1].id, 3);
+    }
 
     // T001: cursor invariants
 
