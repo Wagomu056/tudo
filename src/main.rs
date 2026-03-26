@@ -147,6 +147,19 @@ fn run_app(
 }
 
 fn handle_normal_key(app: &mut AppState, code: KeyCode) {
+    // Focus-switch shortcuts work from any panel
+    match code {
+        KeyCode::Char('m') => {
+            app.focus_area = FocusArea::Memo;
+            return;
+        }
+        KeyCode::Char('t') => {
+            app.focus_area = FocusArea::Kanban;
+            return;
+        }
+        _ => {}
+    }
+
     if app.focus_area == FocusArea::Memo {
         match code {
             KeyCode::Char('h') | KeyCode::Left => app.move_memo_left(),
@@ -221,5 +234,51 @@ fn handle_input_key(app: &mut AppState, code: KeyCode, modifiers: KeyModifiers) 
         KeyCode::Home => app.input.move_home(),
         KeyCode::End => app.input.move_end(),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tudo::model::BoardState;
+
+    fn make_app() -> AppState {
+        AppState::new(BoardState::default())
+    }
+
+    // T002 [US1]: pressing 'm' from Kanban focus moves focus to Memo
+    #[test]
+    fn test_m_key_focuses_memo() {
+        let mut app = make_app();
+        app.focus_area = FocusArea::Kanban;
+        handle_normal_key(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.focus_area, FocusArea::Memo);
+    }
+
+    // T003 [US1]: pressing 'm' when already in Memo focus is idempotent
+    #[test]
+    fn test_m_key_idempotent_when_memo_focused() {
+        let mut app = make_app();
+        app.focus_area = FocusArea::Memo;
+        handle_normal_key(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.focus_area, FocusArea::Memo);
+    }
+
+    // T005 [US2]: pressing 't' from Memo focus moves focus to Kanban
+    #[test]
+    fn test_t_key_focuses_kanban() {
+        let mut app = make_app();
+        app.focus_area = FocusArea::Memo;
+        handle_normal_key(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.focus_area, FocusArea::Kanban);
+    }
+
+    // T006 [US2]: pressing 't' when already in Kanban focus is idempotent
+    #[test]
+    fn test_t_key_idempotent_when_kanban_focused() {
+        let mut app = make_app();
+        app.focus_area = FocusArea::Kanban;
+        handle_normal_key(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.focus_area, FocusArea::Kanban);
     }
 }
